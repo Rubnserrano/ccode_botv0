@@ -24,6 +24,10 @@ from pydantic import BaseModel
 
 from src.strategy_engine.generic_calculator import calc_formula, register_dynamic_indicator
 from src.strategy_engine.registry import INDICATOR_REGISTRY
+from src.intelligence.models import DataSource, ParseConfig, AlignConfig, RateLimit
+from src.intelligence.registry import save_source, load_source, list_sources as list_data_sources, delete_source, try_auto_discover
+from src.intelligence.fetcher import fetch_source
+from src.intelligence.aligner import align_source
 
 logger = logging.getLogger(__name__)
 
@@ -212,3 +216,117 @@ def system_status():
         info["paper_trading"] = json.loads(state_path.read_text())
 
     return info
+
+
+# ─── Data Source endpoints ───────────────────────────────────────────────────
+
+class DataSourceRequest(BaseModel):
+    name: str
+    url: str
+    description: str = ""
+    params: dict = {}
+    headers: dict = {}
+    schedule: str = "1h"
+    parse: dict = {"type": "json", "timestamp_field": "ts", "value_field": "value"}
+    columns: dict = {"value": "value"}
+    align: dict = {"method": "ffill", "target_timeframes": ["15m"]}
+    api_key: str = ""
+
+
+@app.post("/data-sources")
+def create_data_source(req: DataSourceRequest):
+    """Register a new external data source.
+
+    The source is saved but NOT fetched until:
+      - A strategy references its column
+      - POST /data-sources/{name}/fetch is called
+    """
+    parse_cfg = ParseConfig(**req.parse)
+    align_cfg = AlignConfig(**req.align)
+    rate_limit = RateLimit()
+    ds = DataSource(
+        name=req.name, url=req.url, description=req.description,
+        params=req.params, headers=req.headers,
+        schedule=req.schedule, parse=parse_cfg,
+        columns=req.columns, align=align_cfg,
+        rate_limit=rate_limit, api_key=req.api_key,
+    )
+    errors = ds.validate()
+    if errors:
+        raise HTTPException(400, f"Validation errors: {', '.join(errors)}")
+
+    # Check duplicate
+    existing = load_source(req.name)
+    if existing:
+        raise HTTPException(409, f"Data source '{req.name}' already exists")
+
+    save_source(ds)
+    return {
+        "status": "registered",
+        "name": req.name,
+        "schedule": req.schedule,
+        "note": "Source saved. Fetch on first use, or POST /data-sources/{name}/fetch",
+    }
+
+
+@app.get("/data-sources")
+def list_all_data_sources():
+    """List all registered data sources."""
+    return {"total": len(list_data_sources()), "sources": list_data_sources()}
+
+
+@app.get("/data-sources/{name}")
+def get_data_source(name: str):
+    """Get details of a specific data source."""
+    ds = load_source(name)
+    if ds is None:
+        raise HTTPException(404, f"Data source '{name}' not found")
+    return ds.to_dict()
+
+
+@app.delete("/data-sources/{name}")
+def remove_data_source(name: str):
+    """Delete a data source and all its data."""
+    if load_source(name) is None:
+        raise HTTPException(404, f"Data source '{name}' not found")
+    delete_source(name)
+    return {"status": "deleted", "name": name}
+
+
+@app.post("/data-sources/{name}/fetch")
+def fetch_data_source(name: str):
+    """Force an immediate fetch of a data source.
+
+    The data is downloaded, aligned to configured timeframes,
+    and the column is registered in the indicator registry.
+    """
+    ds = load_source(name)
+    if ds is None:
+        raise HTTPException(404, f"Data source '{name}' not found")
+
+    df = fetch_source(ds)
+    if df.empty:
+        raise HTTPException(502, f"Fetch returned no data for '{name}'")
+
+    for tf in ds.align.target_timeframes:
+        align_source(df, ds, tf)
+
+    # Register column in indicator registry
+    from src.strategy_engine.registry import INDICATOR_REGISTRY
+    col_name = list(ds.columns.values())[0]
+    if col_name not in INDICATOR_REGISTRY:
+        INDICATOR_REGISTRY[col_name] = lambda df, p, _c=col_name: df[_c] if _c in df.columns else pd.Series(0, index=df.index)
+
+    # Update metadata
+    from datetime import datetime, timezone
+    ds.total_rows = len(df)
+    ds.last_fetch_at = datetime.now(timezone.utc).isoformat()
+    save_source(ds)
+
+    return {
+        "status": "fetched",
+        "name": name,
+        "rows": len(df),
+        "columns": list(ds.columns.values()),
+        "timeframes": ds.align.target_timeframes,
+    }
