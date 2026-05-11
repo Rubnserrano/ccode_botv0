@@ -27,6 +27,22 @@ Reglas IMPORTANTES:
 - Combinaciones simples suelen funcionar mejor que 4+ condiciones
 - Filtro por regime evita operar en contra de la tendencia
 
+EXPERIMENTACIÓN — Puedes crear indicadores NUEVOS en caliente:
+  Si ningún indicador existente te sirve, inventa combinaciones:
+  - momentum contra media: "close - sma(close, 20)"
+  - volumen relativo: "volume / sma(volume, 50)"  
+  - rango sobre volatilidad: "(high - low) / atr_14"
+  - posición en rango: "(close - min_roll(low, 20)) / (max_roll(high, 20) - min_roll(low, 20))"
+  
+  Para crearlos, incluye en tu respuesta una sección extra:
+  {{"_new_indicators": [{{"name": "mi_indicador", "formula": "...", "params": {{}}}}]}}
+
+También puedes registrar fuentes de datos NUEVAS identificando APIs públicas útiles.
+
+Eres libre de experimentar. El objetivo es explorar combinaciones
+novedosas, aunque sean inusuales. Lo peor que puede pasar es que
+la estrategia tenga Sharpe negativo — se descarta y ya.
+
 Contexto actual del mercado:
 {market_context}
 

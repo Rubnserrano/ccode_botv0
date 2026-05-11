@@ -29,6 +29,28 @@ from src.indicators.calculator import calc_all
 
 logger = logging.getLogger(__name__)
 
+# Telegram notifier (initialized in main if env vars are set)
+_telegram = None
+
+
+async def _maybe_notify(method: str, *args, **kwargs) -> None:
+    """Call a telegram notification method if the notifier is available."""
+    if _telegram is not None:
+        try:
+            from src.notification.telegram import (
+                notify_start, notify_strategy_found, notify_digest, notify_done,
+            )
+            func = {
+                "start": notify_start,
+                "strategy": notify_strategy_found,
+                "digest": notify_digest,
+                "done": notify_done,
+            }.get(method)
+            if func:
+                await func(*args, **kwargs)
+        except Exception as e:
+            logger.warning("telegram notification failed: %s", e)
+
 
 def _market_context(df: pd.DataFrame) -> str:
     """Build a human-readable market summary for the LLM."""
@@ -201,6 +223,7 @@ async def main():
     parser.add_argument("--resample", type=str, default="15m", help="Timeframe")
     parser.add_argument("--symbol", type=str, default="btcusdt")
     parser.add_argument("--rounds", type=int, default=1, help="Number of rounds")
+    parser.add_argument("--digest-minutes", type=int, default=45, help="Telegram digest interval (min)")
     parser.add_argument("--api-key", type=str, default=None, help="OpenRouter key")
     args = parser.parse_args()
 
@@ -230,6 +253,18 @@ async def main():
     init_leaderboard()
     llm = LLMClient(api_key=api_key)
 
+    # Telegram setup
+    global _telegram
+    if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+        _telegram = True
+        await _maybe_notify("start", args.rounds, args.n, args.days, args.resample)
+        start_time = time.time()
+    else:
+        _telegram = None
+
+    all_results = []
+    last_digest_time = time.time()
+
     try:
         for round_num in range(args.rounds):
             round_label = f"Round {round_num + 1}/{args.rounds}"
@@ -242,6 +277,7 @@ async def main():
                 n=args.n, days=args.days,
                 timeframe=args.resample, symbol=args.symbol,
             )
+            all_results.extend(results)
 
             if results:
                 best = max(results, key=lambda r: r["sharpe"])
@@ -249,10 +285,47 @@ async def main():
                       f"PF={best['profit_factor']:.2f}  "
                       f"PnL=${best['total_pnl']:+.0f}", flush=True)
 
+                # Notify on positive findings
+                for r in results:
+                    s = r["sharpe"]
+                    if s > 0 and r["n_trades"] >= 30:
+                        try:
+                            rules = json.loads(r["rules_json"])
+                        except Exception:
+                            rules = {}
+                        await _maybe_notify("strategy",
+                            r["run_id"], s, r["win_rate"],
+                            r["profit_factor"], r["total_pnl"],
+                            r["n_trades"],
+                            r.get("llm_explanation", ""),
+                            json.dumps(rules.get("entry_conditions", []), indent=2),
+                        )
+
+                # Digest configurable
+                if time.time() - last_digest_time > args.digest_minutes * 60:
+                    elapsed_h = (time.time() - start_time) / 3600
+                    positive = [r for r in all_results if r["sharpe"] > 0 and r["n_trades"] >= 30]
+                    best_all = max(all_results, key=lambda r: r["sharpe"]) if all_results else {"sharpe": 0}
+                    await _maybe_notify("digest",
+                        elapsed_h, len(all_results), len(positive),
+                        best_all["sharpe"], round_num + 1, llm.total_cost,
+                    )
+                    last_digest_time = time.time()
+
     finally:
         await llm.close()
         print(f"\nTotal LLM cost: ${llm.total_cost:.4f}", flush=True)
         print("Audit log: data/parquet/brain/audit.jsonl", flush=True)
+
+        # Final digest
+        if _telegram and all_results:
+            elapsed_h = (time.time() - start_time) / 3600 if _telegram else 0
+            positive = [r for r in all_results if r["sharpe"] > 0 and r["n_trades"] >= 30]
+            best_all = max(all_results, key=lambda r: r["sharpe"]) if all_results else {"sharpe": 0, "run_id": ""}
+            await _maybe_notify("done",
+                elapsed_h, len(all_results), len(positive),
+                best_all["sharpe"], best_all.get("run_id", ""), llm.total_cost,
+            )
 
 
 if __name__ == "__main__":
