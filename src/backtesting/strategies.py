@@ -9,10 +9,17 @@ Where the return series has values:
     0  = HOLD / no signal
 
 All functions are pure — they only read the DataFrame, never mutate it.
+
+The module also exports ``STRATEGY_REGISTRY`` as a ``dict[str, Strategy]``
+and ``FN_MAP`` for use with ``Strategy.from_dict()``.
 """
 from __future__ import annotations
 
+from functools import partial
+
 import pandas as pd
+
+from src.backtesting.strategy import Strategy
 
 
 def rsi_mean_reversion(df: pd.DataFrame) -> pd.Series:
@@ -62,10 +69,43 @@ def heikin_ashi_streak(df: pd.DataFrame) -> pd.Series:
     return sig
 
 
-STRATEGY_REGISTRY = {
+FN_MAP = {
     "rsi_mean_reversion": rsi_mean_reversion,
     "macd_crossover": macd_crossover,
     "ema_trend": ema_trend,
     "vwap_bounce": vwap_bounce,
     "heikin_ashi_streak": heikin_ashi_streak,
+}
+
+STRATEGY_REGISTRY: dict[str, Strategy] = {
+    "rsi_mean_reversion": Strategy(
+        name="rsi_mean_reversion",
+        params={"rsi_period": 14, "oversold": 30, "overbought": 70},
+        description="BUY if RSI < 30, SELL if RSI > 70",
+        fn=rsi_mean_reversion,
+    ),
+    "macd_crossover": Strategy(
+        name="macd_crossover",
+        params={"fast": 12, "slow": 26, "signal": 9},
+        description="BUY on MACD bullish cross, SELL on bearish cross",
+        fn=macd_crossover,
+    ),
+    "ema_trend": Strategy(
+        name="ema_trend",
+        params={"fast": 9, "medium": 21, "slow": 50},
+        description="BUY if close > EMA50 and EMA9 > EMA21, SELL opposite",
+        fn=ema_trend,
+    ),
+    "vwap_bounce": Strategy(
+        name="vwap_bounce",
+        params={"deviation_pct": 0.01},
+        description="BUY if price < VWAP - 1%, SELL if price > VWAP + 1%",
+        fn=vwap_bounce,
+    ),
+    "heikin_ashi_streak": Strategy(
+        name="heikin_ashi_streak",
+        params={"min_streak": 3},
+        description="BUY on 3+ green HA candles, SELL on 3+ red HA candles",
+        fn=heikin_ashi_streak,
+    ),
 }
