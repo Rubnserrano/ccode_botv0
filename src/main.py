@@ -23,6 +23,7 @@ import logging
 import os
 import signal
 from datetime import datetime, timezone
+from inspect import iscoroutine
 from pathlib import Path
 
 import pandas as pd
@@ -180,6 +181,8 @@ async def main():
     parser.add_argument("--days", type=int, default=862, help="Days of history if empty (default: 862 ~ Jan 2024)")
     parser.add_argument("--skip-download", action="store_true", help="Skip historical download + sync")
     parser.add_argument("--no-tsdb", action="store_true", help="Skip TimescaleDB entirely")
+    parser.add_argument("--paper", type=str, default=None, choices=["rsi_mean_reversion", "macd_crossover", "ema_trend", "vwap_bounce", "heikin_ashi_streak"],
+                        help="Enable paper trading with strategy name")
     args = parser.parse_args()
 
     symbols = [s.strip().lower() for s in args.symbols.split(",")]
@@ -209,10 +212,34 @@ async def main():
     trade_buffers: dict[str, TradeBuffer] = {}
     candle_buffers: dict[str, CandleBuffer] = {}
 
+    # Paper trading runner
+    paper_runner = None
+    if args.paper:
+        from src.paper.runner import PaperRunner
+        paper_runner = PaperRunner(strategy_name=args.paper)
+        logger.info("orchestrator: paper trading enabled — strategy=%s", args.paper)
+
     for asset in assets:
         price_buffers[asset] = PriceBuffer(asset)
         trade_buffers[asset] = TradeBuffer(asset)
-        candle_buffers[asset] = CandleBuffer(asset, on_close=_candle_closed(asset, tsdb))
+        on_close = _candle_closed(asset, tsdb)
+        if paper_runner:
+            _paper = paper_runner
+            _persist = on_close
+
+            def _chain(candle):
+                result = _persist(candle)
+                if iscoroutine(result):
+                    asyncio.create_task(_chain_async(candle, result, _paper))
+                else:
+                    _paper.on_candle_close(candle)
+
+            async def _chain_async(candle, persist_result, paper):
+                await persist_result
+                paper.on_candle_close(candle)
+
+            on_close = _chain
+        candle_buffers[asset] = CandleBuffer(asset, on_close=on_close)
 
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
