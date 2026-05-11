@@ -96,3 +96,85 @@ TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode" .venv/bin/python3 -m
 - Phase 11: Strategy DSL prep (Strategy dataclass), walk-forward, evolution engine, genealogy
 - Phase 12: Paper trading (PaperAccount, runner, decoupled Streamlit dashboard)
 - Phase 13: Feature Store (precomputed indicators in Parquet, builder CLI, real-time updates)
+
+## How to Add a New Indicator (Feature)
+
+Example: adding ATR (Average True Range) as indicator #14.
+
+### Step 1: Add the function to `src/indicators/calculator.py`
+
+```python
+def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range — volatility indicator."""
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        (df["high"] - df["low"]).abs(),
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(window=period, min_periods=period).mean()
+```
+
+Rules:
+- Pure function: no I/O, no side effects, no global state
+- Input: pd.Series or pd.DataFrame (OHLCV)
+- Output: pd.Series or pd.DataFrame
+- Return NaN for periods before the indicator has enough data
+- All values must be float64 (pyarrow will infer this automatically)
+
+### Step 2: Register it in `calc_all()`
+
+```python
+def calc_all(df: pd.DataFrame) -> pd.DataFrame:
+    ...
+    result["atr_14"] = calc_atr(result, 14)
+    return result
+```
+
+### Step 3: Rebuild the Feature Store
+
+```bash
+# Build Docker image with the new code
+docker compose build app
+docker compose up -d app
+
+# Rebuild ALL features with the new indicator
+docker compose exec app python -m src.features.builder --symbol BTCUSDT --rebuild
+```
+
+- ``--rebuild`` forces full recalculation of all months.
+- Without ``--rebuild``, only months after the latest feature are built (incremental).
+- The builder reads raw Parquet, runs calc_all(), and writes to data/features/.
+- Build time for 1.24M rows: ~40 seconds.
+
+### Step 4: Verify
+
+```bash
+docker compose exec app python -c "
+import pyarrow.parquet as pq
+pf = pq.read_table('data/features/btcusdt/2026-05.parquet')
+print('Columns:', pf.column_names)  # should include atr_14
+print('Latest ATR:', pf.column('atr_14')[-1])
+"
+```
+
+### What happens automatically after this
+
+| Componente | Se actualiza solo? |
+|-----------|-------------------|
+| **Histórico** (Feature Store) | ✅ Sí — tras rebuild |
+| **Real-time** (main.py) | ✅ Sí — calc_all() ya lo incluye |
+| **Backtesting CLI** | ✅ Sí — lee de features directamente |
+| **Paper trading** | ✅ Sí — usa calc_all() en on_candle_close |
+| **Dashboard** | ❌ No — dashboard no toca features |
+| **TimescaleDB** | ❌ No — TSDB solo guarda OHLCV, no indicadores |
+| **Estrategias existentes** | ❌ No — no usan atr_14 hasta que las edites |
+
+### To use the new indicator in a strategy
+
+```python
+def my_new_strategy(df: pd.DataFrame) -> pd.Series:
+    sig = pd.Series(0, index=df.index)
+    sig[df["atr_14"] > df["atr_14"].rolling(100).mean()] = 1  # high vol → BUY
+    return sig
+```

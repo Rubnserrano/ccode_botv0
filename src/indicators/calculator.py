@@ -99,6 +99,23 @@ def calc_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+# ─── ATR (Average True Range) ────────────────────────────────────────────────
+
+def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range — volatility indicator.
+    
+    True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
+    ATR = SMA of True Range over period.
+    """
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        (df["high"] - df["low"]).abs(),
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(window=period, min_periods=period).mean()
+
+
 # ─── Calc All ────────────────────────────────────────────────────────────────
 
 def calc_all(df: pd.DataFrame) -> pd.DataFrame:
@@ -125,5 +142,7 @@ def calc_all(df: pd.DataFrame) -> pd.DataFrame:
     ha = calc_heikin_ashi(result)
     for col in ha.columns:
         result[col] = ha[col]
+
+    result["atr_14"] = calc_atr(result, 14)
 
     return result
