@@ -62,47 +62,81 @@ async def run_round(
     timeframe: str = "15m",
     symbol: str = "btcusdt",
 ) -> list[dict]:
-    """One full round: generate → backtest → analyze → save.
+    """One full round: generate → fast filter → full backtest → analyze → save.
 
-    Saves results to the leaderboard progressively.
+    Two-phase backtest:
+      Phase 1 (fast):   30d data, ~0.5s/strategy. Descartar obviamente malas.
+      Phase 2 (full):   365d data, ~5s/strategy. Solo sobrevivientes.
+      Analyst:          Solo sobrevivientes (menos costo LLM).
     """
-    # 1. Generate strategies
     past_results = load_leaderboard().tail(15).to_dict("records")
     strategies = await generate_strategies(llm, market_ctx, past_results, n)
     if not strategies:
         logger.warning("orchestrator: no strategies generated")
         return []
 
-    logger.info("orchestrator: evaluating %d strategies", len(strategies))
+    logger.info("orchestrator: %d strategies — fast filter first", len(strategies))
     results = []
 
-    for idx, strategy_dict in enumerate(strategies):
-        strat_name = strategy_dict.get("name", f"brain_{uuid.uuid4().hex[:8]}")
+    # Slice 30d for fast filter
+    fast_bars = min(2880, len(df) - 100)  # ~30d de 15m
+    df_fast = df.iloc[-fast_bars:].reset_index(drop=True)
 
-        # Validate + filter non-numeric values
+    # ── Phase 1: Fast filter (30d) ─────────────────────────────────────
+    survivors = []
+    for strategy_dict in strategies:
+        strat_name = strategy_dict.get("name", "?")
+
+        # Validate
         skip = False
         for cond in strategy_dict.get("entry_conditions", []):
             v = cond.get("value")
             if v is not None and not isinstance(v, (int, float)):
-                logger.warning("orchestrator: %s has non-numeric value '%s' — skipping", strat_name, v)
                 skip = True
                 break
         if skip:
             continue
-
         try:
             sd = validate_strategy(strategy_dict)
-        except Exception as e:
-            logger.warning("orchestrator: invalid strategy %s: %s", strat_name, e)
+        except Exception:
             continue
 
-        # Backtest
-        def eval_fn(d, _sd=sd):
+        def _eval_fast(d, _sd=sd):
+            return evaluate(d, _sd)
+
+        t0 = time.time()
+        _, summary = backtest(
+            df_fast, _eval_fast,
+            horizon=sd.exit.horizon_bars,
+            warmup=50, cooldown=2,
+            size_usdc=50,
+            tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct,
+        )
+        elapsed = time.time() - t0
+        sharpe = summary.get("sharpe", -999)
+        n_t = summary.get("n_trades", 0)
+
+        # Survive if Sharpe > -0.1 and at least 3 trades
+        if sharpe > -0.1 and n_t >= 3:
+            survivors.append((strategy_dict, sd))
+            logger.info("  Fast pass: %s S=%.2f T=%d (%.1fs)", strat_name, sharpe, n_t, elapsed)
+
+    logger.info("  Fast filter: %d/%d survived", len(survivors), len(strategies))
+
+    if not survivors:
+        logger.warning("orchestrator: no strategies survived fast filter")
+        return []
+
+    # ── Phase 2: Full validation (365d) + Analyst ───────────────────────
+    for idx, (strategy_dict, sd) in enumerate(survivors):
+        strat_name = sd.name
+
+        def _eval_full(d, _sd=sd):
             return evaluate(d, _sd)
 
         t0 = time.time()
         trades, summary = backtest(
-            df, eval_fn,
+            df, _eval_full,
             horizon=sd.exit.horizon_bars,
             warmup=50, cooldown=2,
             size_usdc=50,
@@ -111,7 +145,7 @@ async def run_round(
         bt_elapsed = time.time() - t0
         n_trades = summary.get("n_trades", 0)
 
-        # Analyze (if trades > 0)
+        # Analyst
         analysis = {}
         if n_trades > 0 and n_trades < 50000:
             try:
@@ -122,7 +156,6 @@ async def run_round(
             except Exception as e:
                 logger.warning("orchestrator: analyst failed: %s", e)
 
-        # Build result row
         config_json = json.dumps({
             "timeframe": timeframe, "days": days,
             "symbol": symbol, "source": "brain",
@@ -147,17 +180,14 @@ async def run_round(
             "llm_confidence": analysis.get("confidence", 0),
         }
         results.append(row)
-
-        # Save immediately
         append_result(row, strategy_dict)
 
-        # Progress
         wr = row["win_rate"]
         pf = row["profit_factor"]
         pnl = row["total_pnl"]
         s = row["sharpe"]
         tag = " ✅" if row["passes_gates"] else ""
-        print(f"  [{idx+1}/{len(strategies)}] {strat_name[:30]:30s}  "
+        print(f"  [{idx+1}/{len(survivors)}] {strat_name[:30]:30s}  "
               f"S={s:+.2f}  WR={wr:.0%}  PF={pf:.2f}  PnL=${pnl:+.0f}  "
               f"T={n_trades}{tag}", flush=True)
 
