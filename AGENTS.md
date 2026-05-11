@@ -89,3 +89,10 @@ TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode" .venv/bin/python3 -m
 - Phase 4: WebSocket feeds (ticker, trades, candles)
 - Phase 5: Main orchestrator (download + WS + snapshot)
 - Phase 6: TimescaleDB integration (asyncpg, hypertable, continuous aggregates, dual persistence)
+- Phase 7: WebSocket hardening (heartbeat, backoff), async download, unit tests (31)
+- Phase 8: Dockerize app (Dockerfile + compose with TSDB + app services)
+- Phase 9: OHLCV indicator calculator (RSI, MACD, EMA, VWAP, OBI, Heikin-Ashi)
+- Phase 10: Backtesting engine (costs, metrics, 5 strategies, CLI, walk-forward, evolution, genealogy)
+- Phase 11: Strategy DSL prep (Strategy dataclass), walk-forward, evolution engine, genealogy
+- Phase 12: Paper trading (PaperAccount, runner, decoupled Streamlit dashboard)
+- Phase 13: Feature Store (precomputed indicators in Parquet, builder CLI, real-time updates)
