@@ -1,0 +1,129 @@
+"""Pure OHLCV indicator calculator.
+
+All functions are stateless — they take pandas Series/DataFrame
+and return computed values. No I/O, no side effects.
+
+Usage:
+    from src.indicators.calculator import calc_all
+    df = calc_all(df)  # adds rsi_14, macd, ema_*, vwap, obi, ha_*
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+# ─── RSI ─────────────────────────────────────────────────────────────────────
+
+def calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder's smoothed RSI. Returns 0-100, NaN until period+1 bars."""
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+# ─── MACD ────────────────────────────────────────────────────────────────────
+
+def calc_macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal_period: int = 9,
+) -> pd.DataFrame:
+    """MACD line, signal line, and histogram."""
+    ema_fast = close.ewm(span=fast, min_periods=fast).mean()
+    ema_slow = close.ewm(span=slow, min_periods=slow).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal_period, min_periods=signal_period).mean()
+    histogram = macd_line - signal_line
+    return pd.DataFrame({
+        "macd": macd_line,
+        "macd_signal": signal_line,
+        "macd_hist": histogram,
+    })
+
+
+# ─── EMA ─────────────────────────────────────────────────────────────────────
+
+def calc_ema(series: pd.Series, period: int) -> pd.Series:
+    """Exponential Moving Average."""
+    return series.ewm(span=period, min_periods=period).mean()
+
+
+# ─── VWAP ────────────────────────────────────────────────────────────────────
+
+def calc_vwap(df: pd.DataFrame) -> pd.Series:
+    """Volume-Weighted Average Price (rolling from start of DataFrame).
+
+    Uses high+low+close as typical price: (h+l+c)/3.
+    """
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    cum_pv = (typical * df["volume"]).cumsum()
+    cum_vol = df["volume"].cumsum()
+    return cum_pv / cum_vol.replace(0, np.nan)
+
+
+# ─── OBI (On-Balance Volume) ─────────────────────────────────────────────────
+
+def calc_obi(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """On-Balance Volume. Accumulates volume based on close direction."""
+    direction = np.sign(close.diff())
+    obi = (direction * volume).fillna(0).cumsum()
+    return obi
+
+
+# ─── Heikin-Ashi ─────────────────────────────────────────────────────────────
+
+def calc_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Heikin-Ashi candles: ha_open, ha_high, ha_low, ha_close."""
+    ha_close = (df["open"] + df["high"] + df["low"] + df["close"]) / 4
+    ha_open = df["open"].copy()
+    for i in range(1, len(df)):
+        ha_open.iloc[i] = (ha_open.iloc[i - 1] + ha_close.iloc[i - 1]) / 2
+    ha_high = df[["high", "low", "close"]].max(axis=1).combine(
+        ha_open, np.maximum
+    )
+    ha_low = df[["high", "low", "close"]].min(axis=1).combine(
+        ha_open, np.minimum
+    )
+    return pd.DataFrame({
+        "ha_open": ha_open,
+        "ha_high": ha_high,
+        "ha_low": ha_low,
+        "ha_close": ha_close,
+    })
+
+
+# ─── Calc All ────────────────────────────────────────────────────────────────
+
+def calc_all(df: pd.DataFrame) -> pd.DataFrame:
+    """Add all indicators to the OHLCV DataFrame.
+
+    Returns a copy with indicator columns appended.
+    Does not mutate the input.
+    """
+    result = df.copy()
+    close = result["close"]
+
+    result["rsi_14"] = calc_rsi(close, 14)
+
+    macd_df = calc_macd(close, 12, 26, 9)
+    for col in macd_df.columns:
+        result[col] = macd_df[col]
+
+    for period in (9, 21, 50):
+        result[f"ema_{period}"] = calc_ema(close, period)
+
+    result["vwap"] = calc_vwap(result)
+    result["obi"] = calc_obi(close, result["volume"])
+
+    ha = calc_heikin_ashi(result)
+    for col in ha.columns:
+        result[col] = ha[col]
+
+    return result
