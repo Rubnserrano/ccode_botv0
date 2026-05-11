@@ -95,27 +95,34 @@ def list_indicators():
 @app.post("/indicators/test")
 def test_indicator(req: FormulaTestRequest):
     """Test a formula on the latest market data without registering."""
-    from src.indicators.calculator import calc_all
-    data_path = Path("data/raw/binance/btcusdt/15m/data.parquet")
-    if not data_path.exists():
-        raise HTTPException(404, "No 15m data found")
+    try:
+        from src.indicators.calculator import calc_all
+        data_path = Path("data/raw/binance/btcusdt/15m/data.parquet")
+        if not data_path.exists():
+            # Fallback to 1m data
+            data_path = Path("data/raw/binance/btcusdt/1m/data.parquet") if not data_path.exists() else data_path
+            if not data_path.exists():
+                raise HTTPException(404, "No data found (looked in 15m/ and 1m/)")
 
-    df = pd.read_parquet(data_path)
-    df["ts"] = pd.to_datetime(df["ts"], utc=True)
-    df = df.tail(200)  # last 200 bars
-    df = calc_all(df)
+        df = pd.read_parquet(data_path)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        df = df.tail(200)
+        df = calc_all(df)
 
-    result = calc_formula(df, req.formula, req.params)
+        result = calc_formula(df, req.formula, req.params)
 
-    # Return last N values
-    values = result.tail(req.sample_limit).tolist()
-    ts_values = df["ts"].tail(req.sample_limit).dt.isoformat().tolist()
+        values = result.tail(req.sample_limit).tolist()
+        ts_values = df["ts"].tail(req.sample_limit).astype(str).tolist()
 
-    return {
-        "formula": req.formula,
-        "sample": [{"ts": t, "value": v} for t, v in zip(ts_values, values)],
-        "last_value": values[-1] if values else None,
-    }
+        return {
+            "formula": req.formula,
+            "sample": [{"ts": t, "value": round(v, 4) if isinstance(v, float) else v} for t, v in zip(ts_values, values)],
+            "last_value": round(values[-1], 4) if values and isinstance(values[-1], float) else (values[-1] if values else None),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Formula error: {e}")
 
 
 @app.post("/indicators")

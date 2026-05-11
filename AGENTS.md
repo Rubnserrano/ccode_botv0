@@ -231,12 +231,41 @@ After registration, the indicator is immediately available in any strategy JSON:
 ### Formula Language
 
 Formulas use Python syntax with access to:
-- **DataFrame columns**: `close`, `high`, `low`, `open`, `volume`, `rsi_14`, `atr_14`, etc.
-- **Functions**: `sma(series, period)`, `ema(series, period)`, `std(series, period)`, `diff(series, period)`, `shift(series, period)`, `max_roll(series, period)`, `min_roll(series, period)`
-- **Math**: `abs`, `max`, `min`, `sum`, `round`, `sqrt`, `log`, `log10`
-- **Parameters**: `{param_name}` is replaced at registration time
 
-Examples:
+**Available columns** (use by name directly):
+`close`, `high`, `low`, `open`, `volume`, `rsi_14`, `macd`, `macd_signal`, `macd_hist`, `ema_9`, `ema_21`, `ema_50`, `vwap`, `obi`, `atr_14`, `adx_14`, `regime`, `ha_open`, `ha_high`, `ha_low`, `ha_close`
+
+**Available functions** (call by name):
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `sma(series, period)` | Simple Moving Average | `sma(close, 20)` |
+| `ema(series, period)` | Exponential Moving Average | `ema(close, 50)` |
+| `std(series, period)` | Rolling Std Dev | `std(close, 20)` |
+| `shift(series, n)` | Shift back N periods | `shift(close, 1)` |
+| `diff(series, n)` | Difference over N periods | `diff(close, 12)` |
+| `pct_change(series, n)` | % change over N periods | `pct_change(close, 1)` |
+| `max_roll(series, n)` | Rolling max | `max_roll(high, 50)` |
+| `min_roll(series, n)` | Rolling min | `min_roll(low, 50)` |
+
+**Math**: `abs(x)`, `max(a,b)`, `min(a,b)`, `sum(list)`, `round(x)`, `sqrt(x)`, `log(x)`, `log10(x)`
+
+**Parameters**: `{param_name}` is replaced at registration time.
+
+**Also valid**: pandas method syntax on columns — `close.shift(12)` is the same as `shift(close, 12)`.
+
+### ⛔ RESTRICTIONS — What agents CANNOT do
+
+These are blocked for security:
+- ❌ **No `import` statements** — `"__import__('os')"` will fail
+- ❌ **No file I/O** — `"open('/etc/passwd')"` will fail
+- ❌ **No `exec` / `eval`** — nested eval is not allowed
+- ❌ **No network calls** — only math and data operations
+- ❌ **No variable assignment** — `x = close + 1` will fail (use expressions directly)
+
+Formulas are **mathematical expressions only**. They operate on existing columns.
+They cannot create loops, write files, or access the internet.
+
+### Examples
 
 ```python
 # Simple momentum
@@ -266,9 +295,18 @@ curl -X POST http://localhost:8000/indicators/test \
 
 Returns sample values on recent data so the agent can verify the formula works.
 
+**Important:** The API server needs to be running separately:
+```bash
+docker compose exec -d app python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
+```
+
 ### Adding a New Data Source
 
 The system is designed to ingest data from any source. The pipeline:
+
+> ⚠️ **Note:** The `DataSource` base class and `GenericFetcher` are part of the architecture vision.
+> Currently, adding a new source requires creating a custom fetcher in `src/intelligence/` and
+> rebuilding the Feature Store. The abstraction layer will be implemented in a future phase.
 
 ```
 External API (FRED, news, whales, etc.)
