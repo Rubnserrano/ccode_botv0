@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -77,7 +78,7 @@ def _run_backtest(strategy_name, strategy_fn, df, args) -> tuple[pd.DataFrame, d
     trades_df, summary = backtest(
         df, strategy_fn,
         horizon=args.horizon, warmup=args.warmup, cooldown=args.cooldown,
-        size_usdc=args.size,
+        size_usdc=args.size, tp_pct=args.tp, sl_pct=args.sl,
         run_id=run_id,
     )
     elapsed = time.time() - t0
@@ -173,6 +174,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=50, help="Warmup bars (default: 50)")
     parser.add_argument("--cooldown", type=int, default=2, help="Cooldown bars (default: 2)")
     parser.add_argument("--size", type=float, default=50.0, help="Position size in USDC")
+    parser.add_argument("--tp", type=float, default=0.005, help="Take profit fraction (default: 0.005)")
+    parser.add_argument("--sl", type=float, default=0.005, help="Stop loss fraction (default: 0.005)")
     parser.add_argument("--list", action="store_true", help="List strategies and exit")
 
     # Walk-forward
@@ -183,6 +186,9 @@ def main():
     parser.add_argument("--evolve", action="store_true", help="Run evolution")
     parser.add_argument("--generations", type=int, default=5, help="Evolution generations (default: 5)")
     parser.add_argument("--pop-size", type=int, default=20, help="Population size (default: 20)")
+
+    # Parallel
+    parser.add_argument("--parallel", type=int, default=1, help="Parallel workers (default: 1)")
 
     # Misc
     parser.add_argument("--no-save", action="store_true", help="Don't save results to disk")
@@ -206,18 +212,42 @@ def main():
     for sym in symbols:
         df = _load_data(sym, args.days, exchange)
 
-        for name, fn in strategies:
-            try:
-                if args.evolve:
-                    _run_evolution(name, df, args)
-                elif args.walk_forward:
-                    _run_walk_forward(name, fn, df, args)
-                else:
-                    _run_backtest(name, fn, df, args)
-            except Exception as e:
-                print(f"  ERROR {name} on {sym}: {e}")
-                import traceback
-                traceback.print_exc()
+        if args.evolve or args.walk_forward or args.parallel == 1:
+            # Sequential (default)
+            for name, fn in strategies:
+                try:
+                    if args.evolve:
+                        _run_evolution(name, df, args)
+                    elif args.walk_forward:
+                        _run_walk_forward(name, fn, df, args)
+                    else:
+                        _run_backtest(name, fn, df, args)
+                except Exception as e:
+                    print(f"  ERROR {name} on {sym}: {e}")
+                    import traceback
+                    traceback.print_exc()
+        else:
+            # Parallel backtests
+            with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+                futs = {}
+                for name, fn in strategies:
+                    fut = pool.submit(_run_backtest, name, fn, df, args)
+                    futs[fut] = name
+
+                for fut in as_completed(futs):
+                    name = futs[fut]
+                    try:
+                        trades_df, summary, run_id = fut.result()
+                        if not trades_df.empty and not args.no_save:
+                            config = {
+                                "strategy": name, "symbol": sym, "horizon": args.horizon,
+                                "warmup": args.warmup, "cooldown": args.cooldown,
+                                "size_usdc": args.size, "days": args.days,
+                            }
+                            path = save_results(run_id, trades_df, summary, name, config)
+                            print(f"  [{name}] Saved: {path}")
+                    except Exception as e:
+                        print(f"  [{name}] ERROR: {e}")
 
     print(f"\nTotal time: {time.time() - total_start:.1f}s")
 
