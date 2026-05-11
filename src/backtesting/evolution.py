@@ -162,7 +162,6 @@ def evolve(
         )
         ind.n_trades = summary.get("n_trades", 0)
         ind.sharpe = summary.get("sharpe", 0.0)
-
         if ind.n_trades < 30:
             ind.fitness = -999.0
         else:
@@ -186,7 +185,7 @@ def evolve(
     while n_gen < cfg.n_generations:
         n_gen += 1
 
-        # Fitness
+        # Fitness (sequential)
         for ind in pop:
             _fitness(ind)
 
