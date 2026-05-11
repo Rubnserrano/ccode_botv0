@@ -372,7 +372,81 @@ curl -X POST http://localhost:8000/data-sources/fred_vix/fetch
 ```
 
 ```json
-{"indicator": "vix", "op": "lt", "value": 25}
+{"indicator": "vix", "op": "lt", "value": 25}  ← auto-discovered
+```
+
+#### Concrete Example: Fear & Greed Index (already registered)
+
+A working data source currently registered in the system:
+
+```bash
+# 1. View the registered source
+curl http://localhost:8000/data-sources/fear_greed
+
+# 2. Force a fresh fetch
+curl -X POST http://localhost:8000/data-sources/fear_greed/fetch
+
+# 3. Use in any strategy immediately
+```
+
+```json
+{"indicator": "fear_greed", "op": "lt", "value": 25}
+```
+
+The Fear & Greed index is a free API (alternative.me) that provides daily market sentiment
+from 0 (extreme fear) to 100 (extreme greed). 3,018 historical rows (2018-present).
+
+#### Registering a New Data Source
+
+```bash
+curl -X POST http://localhost:8000/data-sources \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my_source",
+    "url": "https://api.example.com/data",
+    "description": "My custom data",
+    "params": {"api_key": "..."},
+    "schedule": "1h",
+    "parse": {
+      "type": "json",
+      "timestamp_field": "data[].timestamp",
+      "value_field": "data[].value",
+      "value_transform": "float"
+    },
+    "columns": {"value": "my_indicator"},
+    "align": {
+      "method": "ffill",
+      "decay_periods": 0,
+      "target_timeframes": ["15m", "1h"]
+    }
+  }'
+```
+
+#### Definition Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | ✅ | Unique identifier (alphanumeric + underscores) |
+| `url` | ✅ | HTTPS endpoint |
+| `schedule` | ✅ | Fetch interval: "5m", "1h", "1d" |
+| `parse.type` | ✅ | "json" or "csv" |
+| `parse.timestamp_field` | ✅ | Dotted path to timestamp field (supports arrays: `data[].timestamp`) |
+| `parse.value_field` | ✅ | Dotted path to value field |
+| `columns` | ✅ | Map `{"value": "column_name"}` — column name in Feature Store |
+| `align.method` | ✅ | "ffill", "interpolate", "sum", "avg" |
+| `api_key` | ❌ | API key (stored in JSON, unencrypted for POC) |
+
+#### Fetching and Using
+
+```bash
+# Force fetch immediately
+curl -X POST http://localhost:8000/data-sources/my_source/fetch
+
+# The column is now available in any strategy
+```
+
+```json
+{"indicator": "my_indicator", "op": "lt", "value": 25}
 ```
 
 #### Response on Fetch
