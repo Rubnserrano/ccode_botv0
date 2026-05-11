@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from inspect import iscoroutine
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from inspect import iscoroutine
 from typing import Optional
 
 import websockets
@@ -21,6 +22,49 @@ import websockets
 logger = logging.getLogger(__name__)
 
 BINANCE_WS_BASE = "wss://stream.binance.com:9443"
+MAX_BACKOFF = 60
+HEARTBEAT_TIMEOUT = 60
+
+
+# ─── Connection helpers ──────────────────────────────────────────────────────
+
+class _Conn:
+    """Tracks connection state for one stream.
+
+    Provides exponential backoff and heartbeat monitoring.
+    After every disconnect, backoff: 1s → 2s → 4s … → MAX_BACKOFF.
+    Resets to 1s on successful data delivery.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.delay = 1.0
+        self.last_msg_at = 0.0
+        self.reconnects = 0
+
+    def heartbeat_ok(self) -> bool:
+        if self.last_msg_at == 0.0:
+            return True
+        return (time.monotonic() - self.last_msg_at) < HEARTBEAT_TIMEOUT
+
+    def mark_received(self):
+        self.last_msg_at = time.monotonic()
+        self.delay = 1.0
+
+    async def wait(self):
+        await asyncio.sleep(self.delay)
+        self.delay = min(self.delay * 2, MAX_BACKOFF)
+        self.reconnects += 1
+
+    def reset_on_connect(self):
+        self.delay = 1.0
+
+    def stats(self) -> dict:
+        return {"reconnects": self.reconnects, "delay": self.delay, "alive": self.heartbeat_ok()}
+
+
+def _stream_label(prefix: str, symbols: list[str]) -> str:
+    return f"{prefix} {'/'.join(symbols)}"
 
 
 # ─── Tick / Price ────────────────────────────────────────────────────────────
@@ -75,16 +119,24 @@ class Trade:
 
 @dataclass
 class TradeBuffer:
-    """Rolling 5-minute window of aggTrades. Provides CVD and VWAP."""
+    """Rolling 5-minute window of aggTrades. Provides CVD and VWAP.
+
+    Maintains a running CVD sum to avoid O(n) traversal on each call.
+    """
     symbol: str
     window_seconds: int = 300
     _trades: deque = field(default_factory=deque)
+    _cvd_running: float = 0.0
 
     def add(self, trade: Trade):
         cutoff_ms = trade.timestamp_ms - self.window_seconds * 1000
         self._trades.append(trade)
+        notional = trade.price * trade.quantity
+        self._cvd_running += notional if not trade.is_buyer_maker else -notional
         while self._trades and self._trades[0].timestamp_ms < cutoff_ms:
-            self._trades.popleft()
+            expired = self._trades.popleft()
+            expired_notional = expired.price * expired.quantity
+            self._cvd_running -= expired_notional if not expired.is_buyer_maker else -expired_notional
 
     def cvd(self, seconds: int) -> float:
         """Cumulative Volume Delta over last N seconds (USD)."""
@@ -98,6 +150,11 @@ class TradeBuffer:
                 notional = t.price * t.quantity
                 delta += notional if not t.is_buyer_maker else -notional
         return delta
+
+    @property
+    def cvd_total(self) -> float:
+        """CVD over the full 5-minute window (uses running sum)."""
+        return self._cvd_running
 
     def vwap(self) -> Optional[float]:
         """VWAP over the full 5-minute window."""
@@ -209,13 +266,18 @@ async def stream_tickers(
     symbols: lowercase like ["btcusdt", "ethusdt"]
     buffers: keyed by asset e.g. {"btc": PriceBuffer(...)}
     """
-    streams = "/".join(f"{s}@ticker" for s in symbols)
-    uri = f"{BINANCE_WS_BASE}/stream?streams={streams}"
+    label = _stream_label("ticker", symbols)
+    uri = f"{BINANCE_WS_BASE}/stream?streams={'/'.join(f'{s}@ticker' for s in symbols)}"
+    conn = _Conn(label)
 
     while True:
         try:
+            if not conn.heartbeat_ok():
+                logger.warning("feed: %s heartbeat miss — reconnecting", label)
+            await conn.wait()
+            conn.reset_on_connect()
             async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as ws:
-                logger.info("feed: ticker connected %s", streams)
+                logger.info("feed: %s connected", label)
                 async for raw in ws:
                     data = json.loads(raw)
                     payload = data.get("data", data)
@@ -231,11 +293,11 @@ async def stream_tickers(
                     if asset in buffers:
                         buffers[asset].add(tick)
                     await tick_queue.put(tick)
+                    conn.mark_received()
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error("feed: ticker error %s — retry 5s", e)
-            await asyncio.sleep(5)
+            logger.error("feed: %s error %s — retry in %.0fs", label, e, conn.delay)
 
 
 # ─── Stream: aggTrade + kline_1m ──────────────────────────────────────────────
@@ -249,14 +311,20 @@ async def stream_trades_and_klines(
 
     Feeds TradeBuffer (CVD/VWAP) and CandleBuffer (RSI/MACD/EMA/HA).
     """
+    label = _stream_label("trade+kline", symbols)
     agg = [f"{s}@aggTrade" for s in symbols]
     kln = [f"{s}@kline_1m" for s in symbols]
     uri = f"{BINANCE_WS_BASE}/stream?streams={'/'.join(agg + kln)}"
+    conn = _Conn(label)
 
     while True:
         try:
+            if not conn.heartbeat_ok():
+                logger.warning("feed: %s heartbeat miss — reconnecting", label)
+            await conn.wait()
+            conn.reset_on_connect()
             async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as ws:
-                logger.info("feed: trade+kline connected %s", symbols)
+                logger.info("feed: %s connected", label)
                 async for raw in ws:
                     data = json.loads(raw)
                     payload = data.get("data", {})
@@ -286,8 +354,18 @@ async def stream_trades_and_klines(
                                 volume=float(k["v"]),
                                 is_closed=k["x"],
                             ))
+                    conn.mark_received()
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error("feed: trade+kline error %s — retry 5s", e)
-            await asyncio.sleep(5)
+            logger.error("feed: %s error %s — retry in %.0fs", label, e, conn.delay)
+
+
+# ─── Convenience: get stream connection stats ─────────────────────────────────
+
+def _make_ticker_conn() -> _Conn:
+    return _Conn("ticker")
+
+
+def _make_trade_kline_conn() -> _Conn:
+    return _Conn("trade+kline")
