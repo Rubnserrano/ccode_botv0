@@ -78,6 +78,25 @@ async def generate_strategies(
         logger.warning("brain: LLM returned unexpected type: %s", type(raw))
         return []
 
+    new_indicators_count = 0
+    if isinstance(strategies, dict):
+        ind_list = strategies.pop("_new_indicators", None) or strategies.pop("new_indicators", None)
+        strategies = strategies.get("strategies") or strategies.get("entries") or list(strategies.values())
+        if ind_list:
+            new_indicators_count = len(ind_list)
+            logger.info("brain: LLM created %d new indicators!", new_indicators_count)
+            for ind in ind_list:
+                try:
+                    from src.strategy_engine.generic_calculator import register_dynamic_indicator
+                    register_dynamic_indicator(
+                        name=ind["name"],
+                        formula=ind["formula"],
+                        params=ind.get("params"),
+                        description=ind.get("description", "LLM-generated indicator"),
+                    )
+                except Exception as e:
+                    logger.warning("brain: failed to register indicator %s: %s", ind.get("name"), e)
+
     if isinstance(strategies, dict) and "strategies" in strategies:
         strategies = strategies["strategies"]
 
@@ -85,5 +104,6 @@ async def generate_strategies(
         logger.warning("brain: expected list, got %s", type(strategies))
         return []
 
-    logger.info("brain: strategist generated %d strategies", len(strategies))
+    extra = f" + {new_indicators_count} new indicators" if new_indicators_count else ""
+    logger.info("brain: strategist generated %d strategies%s", len(strategies), extra)
     return strategies
