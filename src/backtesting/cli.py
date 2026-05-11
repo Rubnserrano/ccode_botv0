@@ -33,6 +33,19 @@ def _list_strategies():
 
 
 def _load_data(symbol: str, days: int | None, exchange: str = "binance") -> pd.DataFrame:
+    # Try features first (precomputed indicators)
+    from src.features.store import read as f_read, available_range as f_range
+    f_start, f_end = f_range(symbol)
+    if f_start is not None:
+        cutoff = None
+        if days:
+            cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+        df = f_read(symbol, start=cutoff)
+        if not df.empty:
+            print(f"  Features: {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
+            return df
+
+    # Fallback: raw + calc_all
     df = read(exchange, symbol)
     if df.empty:
         raise ValueError(f"No data for {symbol}")
