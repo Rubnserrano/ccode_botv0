@@ -15,6 +15,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: ccode-app
+    environment:
+      TIMESCALE_DSN: postgres://ccode:ccode@timescaledb:5432/ccode
+      LOG_LEVEL: INFO
+    volumes:
+      - parquet_data:/app/data
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   timescale_data:
+  parquet_data:
