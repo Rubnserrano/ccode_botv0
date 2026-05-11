@@ -73,7 +73,8 @@ def compute_metrics(pnls: list[float], total_turnover: float) -> TradeMetrics:
     sortino = avg / downside_sd if downside_sd > 0 else float("inf") if avg > 0 else 0.0
 
     max_dd = _max_drawdown(pnls)
-    profit_factor = sum(p for p in pnls if p > 0) / abs(sum(p for p in pnls if p < 0)) if losses > 0 else float("inf")
+    loss_sum = abs(sum(p for p in pnls if p < 0))
+    profit_factor = sum(p for p in pnls if p > 0) / loss_sum if loss_sum > 0 else float("inf")
 
     p_value = _bootstrap_pvalue(pnls)
 

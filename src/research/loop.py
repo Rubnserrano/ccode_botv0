@@ -229,7 +229,6 @@ def run_research(
 
             # Save each result progressively
             append_result(row, strategy_dict)
-            gen_trades += 1
 
             # Save best strategy every 20
             if row["sharpe"] > 0 and row["n_trades"] >= 30:
