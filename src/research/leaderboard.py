@@ -2,6 +2,8 @@
 
 Each strategy result is appended to a Parquet file immediately,
 so partial data survives timeout/crash.
+
+The schema includes LLM analysis columns for future model training.
 """
 from __future__ import annotations
 
@@ -14,13 +16,22 @@ _LEADERBOARD_DIR = Path(__file__).resolve().parents[2] / "data" / "parquet" / "r
 _LEADERBOARD_PATH = _LEADERBOARD_DIR / "leaderboard.parquet"
 
 _SCHEMA_COLS = [
-    "run_id", "generation", "sharpe", "win_rate", "profit_factor",
-    "total_pnl", "max_dd", "n_trades", "passes_gates", "rules_json", "elapsed_bt",
+    # Strategy id
+    "run_id", "generation",
+    # Backtest metrics
+    "sharpe", "win_rate", "profit_factor",
+    "total_pnl", "max_dd", "n_trades", "passes_gates",
+    # Strategy definition + config
+    "rules_json", "config_json",
+    # Timing
+    "elapsed_bt",
+    # LLM analysis (for future training)
+    "llm_model", "llm_explanation", "llm_suggestions", "llm_confidence",
 ]
 
 
 def init_leaderboard() -> None:
-    """Ensure the leaderboard directory exists and schema file is ready."""
+    """Ensure the leaderboard directory exists."""
     _LEADERBOARD_DIR.mkdir(parents=True, exist_ok=True)
     if not _LEADERBOARD_PATH.exists():
         df = pd.DataFrame(columns=_SCHEMA_COLS)
@@ -30,11 +41,18 @@ def init_leaderboard() -> None:
 def append_result(row: dict, strategy_dict: dict | None = None) -> None:
     """Append a single result row to the leaderboard Parquet.
 
-    Also saves the strategy JSON to data/strategies/ if it has positive Sharpe.
+    Also saves the strategy JSON to data/strategies/ if promising.
     """
     df_new = pd.DataFrame([row])
     if _LEADERBOARD_PATH.exists():
         df_old = pd.read_parquet(_LEADERBOARD_PATH)
+        # Reconcile columns — new rows may have cols the schema doesn't yet
+        for col in df_new.columns:
+            if col not in df_old.columns:
+                df_old[col] = None
+        for col in df_old.columns:
+            if col not in df_new.columns:
+                df_new[col] = None
         df_all = pd.concat([df_old, df_new], ignore_index=True)
     else:
         df_all = df_new
