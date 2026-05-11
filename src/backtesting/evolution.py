@@ -199,7 +199,7 @@ def evolve(
             break
 
         # Selection & breeding
-        n_elite = max(1, int(cfg.pop_size * cfg.elite_ratio))
+        n_elite = max(2, int(cfg.pop_size * cfg.elite_ratio))
         elite = pop[:n_elite]
         rest = pop[n_elite:]
 
