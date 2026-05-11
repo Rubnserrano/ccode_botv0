@@ -1,7 +1,17 @@
 """Indicator registry — maps names to calculator functions.
 
-On-the-fly calculation with optional caching (mismo nombre+params
-no recalcula dos veces en la misma llamada).
+On-the-fly calculation with optional caching.
+
+EXTENDING FOR AGENTS:
+  To register a new indicator at runtime (no code change):
+    from src.strategy_engine.generic_calculator import register_dynamic_indicator
+    register_dynamic_indicator("momentum_12", "close - close.shift(12)")
+
+  To register via API:
+    POST /api/indicators  {"name": "momentum_12", "formula": "close - close.shift(12)"}
+
+  After registration, any strategy JSON can use the indicator:
+    {"indicator": "momentum_12", "op": "gt", "value": 0}
 """
 from __future__ import annotations
 

@@ -182,3 +182,155 @@ def my_new_strategy(df: pd.DataFrame) -> pd.Series:
     sig[df["atr_14"] > df["atr_14"].rolling(100).mean()] = 1  # high vol → BUY
     return sig
 ```
+
+## Agent Integration — API Layer
+
+The system exposes a FastAPI for agents to interact with programmatically.
+
+### Starting the API
+
+```bash
+# Inside Docker:
+docker compose exec app python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
+
+# Or add to docker-compose.yml as a service
+```
+
+### Agent Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/` | System overview + available endpoints |
+| `GET` | `/indicators` | List all registered indicators |
+| `POST` | `/indicators/test` | Test a formula without registering |
+| `POST` | `/indicators` | Register a new indicator |
+| `GET` | `/leaderboard?top=10&min_sharpe=0` | Research results |
+| `GET` | `/strategies` | Saved strategies |
+| `GET` | `/system` | System state (data volumes, paper trading) |
+
+### Registering a New Indicator (without coding)
+
+Any agent can create new indicators at runtime using formulas:
+
+```bash
+curl -X POST http://localhost:8000/indicators \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "momentum_12",
+    "formula": "close - close.shift(12)",
+    "description": "12-period momentum"
+  }'
+```
+
+After registration, the indicator is immediately available in any strategy JSON:
+
+```json
+{"indicator": "momentum_12", "op": "gt", "value": 0}
+```
+
+### Formula Language
+
+Formulas use Python syntax with access to:
+- **DataFrame columns**: `close`, `high`, `low`, `open`, `volume`, `rsi_14`, `atr_14`, etc.
+- **Functions**: `sma(series, period)`, `ema(series, period)`, `std(series, period)`, `diff(series, period)`, `shift(series, period)`, `max_roll(series, period)`, `min_roll(series, period)`
+- **Math**: `abs`, `max`, `min`, `sum`, `round`, `sqrt`, `log`, `log10`
+- **Parameters**: `{param_name}` is replaced at registration time
+
+Examples:
+
+```python
+# Simple momentum
+"close - close.shift(12)"
+
+# Bollinger-like: close vs SMA
+"(close - sma(close, 20)) / std(close, 20)"
+
+# Volume spike detection
+"volume > sma(volume, 50) * 1.5"
+
+# Normalized price position
+"(close - min_roll(low, 50)) / (max_roll(high, 50) - min_roll(low, 50)) * 100"
+
+# Custom RSI-like (with parameter)
+"ema(gain, {period}) / ema(loss, {period})"
+# where gain/loss are precomputed in the Feature Store
+```
+
+### Testing a Formula First
+
+```bash
+curl -X POST http://localhost:8000/indicators/test \
+  -H "Content-Type: application/json" \
+  -d '{"formula": "volume > sma(volume, 50) * 1.5", "sample_limit": 5}'
+```
+
+Returns sample values on recent data so the agent can verify the formula works.
+
+### Adding a New Data Source
+
+The system is designed to ingest data from any source. The pipeline:
+
+```
+External API (FRED, news, whales, etc.)
+  → GenericFetcher downloads + transforms
+  → data/external/{source}/{YYYY-MM}.parquet
+  → Aligner resamples to 15m/1h
+  → Feature Store rebuild includes new columns
+  → Any strategy JSON can use them
+```
+
+To add a new source, create a file in `src/intelligence/` following this pattern:
+
+```python
+"""src/intelligence/fred_feed.py — FRED macro data fetcher."""
+
+from src.intelligence.base import DataSource
+
+class FredFeed(DataSource):
+    name = "fred"
+    schedule = "1h"
+    url = "https://api.stlouisfed.org/fred/series/..."
+
+    async def fetch(self) -> pd.DataFrame:
+        resp = await httpx.get(self.url, params={"series_id": "VIXCLS", ...})
+        data = resp.json()
+        return pd.DataFrame({
+            "ts": pd.to_datetime(...),
+            "vix": data["observations"]["value"],
+        })
+```
+
+The base class handles:
+- Automatic periodic fetching
+- Parquet storage in `data/external/{name}/`
+- Timestamp alignment with OHLCV data
+- Feature Store integration
+
+### Running Research via API
+
+```bash
+curl -X POST http://localhost:8000/research/run \
+  -H "Content-Type: application/json" \
+  -d '{"n_strategies": 10, "days": 365, "resample": "15m", "rounds": 2}'
+```
+
+Returns immediately (async). Progress is visible in the logs:
+```bash
+docker compose logs app -f
+```
+
+Or check the leaderboard:
+```bash
+curl http://localhost:8000/leaderboard?top=5
+```
+
+### Agent Workflow (recommended)
+
+```
+1. GET /system       → understand current state (data, indicators)
+2. POST /indicators/test → test a new indicator formula
+3. POST /indicators  → register the indicator
+4. POST /research/run → run research with the new indicator
+5. GET /leaderboard  → see results
+6. GET /strategies   → inspect successful strategies
+```
