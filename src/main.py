@@ -30,6 +30,8 @@ import pandas as pd
 
 from src.download import download_symbol
 from src.store import available_range, row_count, write
+from src.features.store import write as f_write
+from src.indicators.calculator import calc_all
 from src.feed import (
     PriceBuffer, TradeBuffer, CandleBuffer,
     stream_tickers, stream_trades_and_klines,
@@ -284,27 +286,53 @@ async def main():
 
 
 def _candle_closed(asset: str, tsdb):
-    """Return a callback that persists closed candles to Parquet + TimescaleDB."""
+    """Return a callback that persists closed candles to Parquet + TimescaleDB + Features."""
     symbol_upper = f"{asset.upper()}USDT"
+    _buffer: list[dict] = []
+    _MAX_BUFFER = 200
+
+    def _write_features(candle_row: dict):
+        """Buffer recent candles and write the latest indicator row."""
+        _buffer.append(candle_row)
+        if len(_buffer) > _MAX_BUFFER:
+            _buffer.pop(0)
+
+        if len(_buffer) < 15:
+            return  # not enough data for indicators yet
+
+        df = pd.DataFrame(list(_buffer))
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        try:
+            df_ind = calc_all(df)
+            latest = df_ind.iloc[-1:]
+            f_write(symbol_upper, latest)
+        except Exception as e:
+            logger.error("persist: features write failed: %s", e)
 
     async def _on_close(candle):
-        row_df = pd.DataFrame([{
+        row_dict = {
             "ts": datetime.fromtimestamp(candle.open_time_ms / 1000, tz=timezone.utc),
             "open": candle.open,
             "high": candle.high,
             "low": candle.low,
             "close": candle.close,
             "volume": candle.volume,
-        }])
+        }
+        row_df = pd.DataFrame([row_dict])
         try:
             write(EXCHANGE, symbol_upper, row_df)
         except Exception as e:
             logger.error("persist: parquet write failed: %s", e)
 
+        try:
+            _write_features(row_dict)
+        except Exception as e:
+            logger.error("persist: features write failed: %s", e)
+
         if tsdb:
             try:
                 await tsdb.insert_candle(
-                    ts=datetime.fromtimestamp(candle.open_time_ms / 1000, tz=timezone.utc),
+                    ts=row_dict["ts"],
                     symbol=symbol_upper,
                     open_p=candle.open,
                     high=candle.high,
