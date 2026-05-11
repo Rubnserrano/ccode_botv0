@@ -97,12 +97,16 @@ def read(
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     df.sort_values("ts", inplace=True)
     df.drop_duplicates(subset=["ts"], keep="last", inplace=True)
-    start_ts = pd.Timestamp(start, tz="UTC") if start else None
-    end_ts = pd.Timestamp(end, tz="UTC") if end else None
-    if start_ts is not None:
-        df = df[df["ts"] >= start_ts]
-    if end_ts is not None:
-        df = df[df["ts"] <= end_ts]
+    if start is not None:
+        s = pd.Timestamp(start)
+        if s.tz is None:
+            s = s.tz_localize("UTC")
+        df = df[df["ts"] >= s]
+    if end is not None:
+        e = pd.Timestamp(end)
+        if e.tz is None:
+            e = e.tz_localize("UTC")
+        df = df[df["ts"] <= e]
     return df.reset_index(drop=True)
 
 
