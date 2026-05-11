@@ -23,10 +23,11 @@ from src.backtesting.strategy import Strategy
 
 
 def rsi_mean_reversion(df: pd.DataFrame) -> pd.Series:
-    """BUY if RSI < 30 (oversold), SELL if RSI > 70 (overbought)."""
+    """BUY if RSI < 30 in RANGING regime, SELL if RSI > 70 in RANGING regime."""
     sig = pd.Series(0, index=df.index)
-    sig[df["rsi_14"] < 30] = 1
-    sig[df["rsi_14"] > 70] = -1
+    ranging = df.get("regime", pd.Series(0, index=df.index)) == 0
+    sig[(df["rsi_14"] < 30) & ranging] = 1
+    sig[(df["rsi_14"] > 70) & ranging] = -1
     return sig
 
 
@@ -81,7 +82,7 @@ STRATEGY_REGISTRY: dict[str, Strategy] = {
     "rsi_mean_reversion": Strategy(
         name="rsi_mean_reversion",
         params={"rsi_period": 14, "oversold": 30, "overbought": 70},
-        description="BUY if RSI < 30, SELL if RSI > 70",
+        description="BUY if RSI < 30 in RANGING regime, SELL if RSI > 70 in RANGING regime",
         fn=rsi_mean_reversion,
     ),
     "macd_crossover": Strategy(

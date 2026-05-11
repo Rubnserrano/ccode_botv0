@@ -116,6 +116,52 @@ def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(window=period, min_periods=period).mean()
 
 
+# ─── ADX (Average Directional Index) ───────────────────────────────────────────
+
+def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average Directional Index — trend strength (0-100).
+
+    ADX < 20: weak trend / ranging
+    ADX > 25: strong trend
+    """
+    high, low, close = df["high"], df["low"], df["close"]
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = ((up > down) & (up > 0)).astype(float) * up
+    minus_dm = ((down > up) & (down > 0)).astype(float) * down
+    tr = pd.concat([
+        (high - low).abs(),
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean().replace(0, pd.NA)
+    plus_di = 100 * plus_dm.rolling(period).mean() / atr
+    minus_di = 100 * minus_dm.rolling(period).mean() / atr
+    dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)) * 100
+    return dx.rolling(period).mean()
+
+
+def detect_regime(df: pd.DataFrame) -> pd.Series:
+    """Market regime detector — no training required.
+
+    0 = RANGING       lateral, sin tendencia fuerte
+    1 = TRENDING_UP   tendencia alcista
+    2 = TRENDING_DOWN tendencia bajista
+    3 = VOLATILE      volatilidad anómala
+    """
+    adx = calc_adx(df, 14)
+    atr_mean = df["atr_14"].rolling(100).mean()
+    vol_spike = df["atr_14"] > atr_mean * 1.5
+    above_ema = (df["close"] > df["ema_50"]).rolling(50).mean()
+
+    regime = pd.Series(0, index=df.index, dtype=int)
+    regime[vol_spike] = 3
+    trending = adx >= 20
+    regime[trending & (above_ema > 0.6)] = 1
+    regime[trending & (above_ema < 0.4)] = 2
+    return regime
+
+
 # ─── Calc All ────────────────────────────────────────────────────────────────
 
 def calc_all(df: pd.DataFrame) -> pd.DataFrame:
@@ -144,5 +190,7 @@ def calc_all(df: pd.DataFrame) -> pd.DataFrame:
         result[col] = ha[col]
 
     result["atr_14"] = calc_atr(result, 14)
+    result["adx_14"] = calc_adx(result, 14)
+    result["regime"] = detect_regime(result)
 
     return result
