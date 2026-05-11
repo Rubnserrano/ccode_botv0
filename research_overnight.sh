@@ -18,7 +18,7 @@ if [ -z "$API_KEY" ]; then
     exit 1
 fi
 
-MAX_SECONDS=28800       # 8h
+MAX_SECONDS=10800       # 3h
 ROUND_TIMEOUT=600       # 10min max per round
 MAX_RETRIES=3
 START_TS=$(date +%s)

@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -85,13 +86,24 @@ class LLMClient:
         last_error = None
         for model_info in MODEL_CHAIN:
             model = model_info["name"]
-            try:
-                result = await self._call_model(
-                    model, system_prompt, user_prompt,
-                    response_format, max_tokens, temperature,
-                )
+            max_retries = 4 if model == MODEL_CHAIN[0]["name"] else 0
+            for attempt in range(max_retries + 1):
+                try:
+                    result = await self._call_model(
+                        model, system_prompt, user_prompt,
+                        response_format, max_tokens, temperature,
+                    )
+                except httpx.HTTPStatusError as e:
+                    last_error = e
+                    if e.response.status_code == 429 and attempt < max_retries:
+                        wait = 5 * (2 ** attempt)
+                        logger.warning("brain: %s rate limited, retry in %ds", model, wait)
+                        await asyncio.sleep(wait)
+                        continue
+                    logger.warning("brain: %s failed (%s)", model, e)
+                    break  # try next model
 
-                # Calculate cost
+                # Success — cost, extract, cache
                 in_tokens = result.get("usage", {}).get("prompt_tokens", 0)
                 out_tokens = result.get("usage", {}).get("completion_tokens", 0)
                 cost = (
@@ -99,51 +111,33 @@ class LLMClient:
                     + out_tokens / 1000 * model_info["cost_per_1k_out"]
                 )
                 self.total_cost += cost
-
-                # Extract content
                 content_str = result["choices"][0]["message"]["content"]
 
-                # Parse JSON if requested
                 if response_format == "json_object":
-                    # Clean potential markdown fences
                     if "```json" in content_str:
                         content_str = content_str.split("```json")[1].split("```")[0]
                     elif "```" in content_str:
                         content_str = content_str.split("```")[1].split("```")[0]
 
                 response_data = {
-                    "content": content_str,
-                    "model": model,
-                    "cost": round(cost, 6),
-                    "cached": False,
-                    "tokens_in": in_tokens,
-                    "tokens_out": out_tokens,
+                    "content": content_str, "model": model,
+                    "cost": round(cost, 6), "cached": False,
+                    "tokens_in": in_tokens, "tokens_out": out_tokens,
                 }
-
-                # Cache
                 self._cache[cache_key] = response_data
-
-                # Audit
                 _append_audit({
-                    "ts": time.time(),
-                    "prompt_hash": cache_key,
-                    "model": model,
-                    "system_prompt": system_prompt,
-                    "user_prompt": user_prompt,
-                    "response": content_str,
-                    "tokens_in": in_tokens,
-                    "tokens_out": out_tokens,
-                    "cost": cost,
-                    "cached": False,
+                    "ts": time.time(), "prompt_hash": cache_key,
+                    "model": model, "system_prompt": system_prompt,
+                    "user_prompt": user_prompt, "response": content_str,
+                    "tokens_in": in_tokens, "tokens_out": out_tokens,
+                    "cost": cost, "cached": False,
                 })
-
                 logger.info("brain: %s  in=%d out=%d cost=$%.6f",
                             model, in_tokens, out_tokens, cost)
                 return response_data
 
-            except Exception as e:
-                logger.warning("brain: %s failed (%s), trying next model", model, e)
-                last_error = e
+            else:
+                # Inner for loop completed without success (rate limit exhausted)
                 continue
 
         raise RuntimeError(f"All LLM models failed. Last error: {last_error}")

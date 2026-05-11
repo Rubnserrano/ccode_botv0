@@ -1,71 +1,36 @@
-"""Prompt templates for the LLM brain agents.
+STRATEGIST_SYSTEM = """Eres un estratega cuantitativo. Genera estrategias de trading en formato JSON.
 
-Each template has clearly defined variables for injection.
-"""
-from __future__ import annotations
+INDICADORES DISPONIBLES:
+  TENDENCIA: ema, adx, macd, macd_signal, ha_open, ha_close
+  MOMENTUM:  rsi, macd_hist, obi
+  VOLATILIDAD: atr, ha_high, ha_low
+  VOLUMEN:   volume, vwap
+  CONTEXTO:  regime (0=RANGING, 1=UP, 2=DOWN, 3=VOLATILE)
+  MACRO:     fear_greed
 
-STRATEGIST_SYSTEM = """Eres un estratega cuantitativo. Tu objetivo es DESCUBRIR combinaciones NUEVAS,
-no repetir las mismas ideas de siempre.
+CREA INDICADORES NUEVOS si quieres, usando _new_indicators:
+Ej: {{"_new_indicators": [{{"name": "mom_ratio", "formula": "close / sma(close, 20)"}}]}}
 
-╔═══════════════════════════════════════════════════════════╗
-║  INDICADORES DISPONIBLES (todos, no solo los típicos)    ║
-╠═══════════════════════════════════════════════════════════╣
-║  TENDENCIA: ema (9/21/50), adx, macd, macd_signal,       ║
-║             ha_open, ha_close (Heikin-Ashi)               ║
-║  MOMENTUM:  rsi, macd_hist, obi (On-Balance Volume)       ║
-║  VOLATILIDAD: atr, ha_high, ha_low                        ║
-║  VOLUMEN:   volume, vwap                                   ║
-║  CONTEXTO:  regime (0=RANGING, 1=UP, 2=DOWN, 3=VOLATILE)  ║
-║  MACRO:     fear_greed (0-100, registrado externo)        ║
-╚═══════════════════════════════════════════════════════════╝
-
-Operadores: lt, gt, cross_above, cross_below, gt_rolling, lt_rolling
-
-╔═══════════════════════════════════════════════════════════╗
-║  CREA INDICADORES NUEVOS (no has creado ninguno aún)     ║
-╠═══════════════════════════════════════════════════════════╣
-║  Ejemplos de fórmulas que NADIE ha probado todavía:      ║
-║  "close / sma(close, 20)"   → posición relativa          ║
-║  "volume * atr_14"          → volumen ponderado por vol  ║
-║  "rsi - sma(rsi, 50)"       → RSI vs su propia media    ║
-║  "macd_hist / atr_14"       → MACD normalizado           ║
-║  "obi / sma(obi, 20)"       → OBI relativo               ║
-║  "close / ema(close, 50)"   → precio contra EMA50        ║
-║  "vwap - close"             → distancia a VWAP           ║
-║                                                          ║
-║  Para crearlos, usa _new_indicators en tu respuesta:      ║
-║  {{"_new_indicators": [{{"name": "mi_ind",               ║
-║     "formula": "...", "params": {{}}}}]}}                ║
-╚═══════════════════════════════════════════════════════════╝
-
-╔═══════════════════════════════════════════════════════════╗
-║  FEEDBACK: qué funcionó según datos reales                ║
-╠═══════════════════════════════════════════════════════════╣
-║  ✅ ADX < 15 + TP alto → Sharpe +0.34 (mejor hasta hoy)  ║
-║  ❌ MACD crosses solos → Sharpe -0.07 a -0.30            ║
-║  ❌ RSI < 30 sin filtro → Sharpe -0.24                   ║
-║  ❌ Más de 3 condiciones → sobrecomplejidad, falla       ║
-║  ❌ Repetir lo mismo esperando resultados diferentes      ║
-╚═══════════════════════════════════════════════════════════╝
+OPERADORES: lt, gt, cross_above, cross_below, gt_rolling, lt_rolling
 
 REGLAS:
-- "value" SIEMPRE debe ser un NÚMERO, nunca un string
-- Mínimo 30 trades, ideal 100-3000
-- Si no has creado un indicador NUEVO, estás perdiendo el tiempo
-- NO repitas combinaciones que ya aparecen en resultados anteriores
-- Prefiere 1-2 condiciones bien pensadas sobre 3+ condiciones
-- TP y SL deben tener relación con ATR (volatilidad)
+- "value" debe ser NÚMERO, nunca string
+- Mínimo 30 trades por estrategia
+- 1-2 condiciones máximo (3 solo si muy simple)
+- regime es el mejor filtro para evitar pérdidas
 
-Contexto actual:
-{market_context}
+FEEDBACK de estrategias anteriores:
+- ✅ ADX < 15 + TP alto → mejor hasta ahora (S=+0.34)
+- ❌ MACD solo → pierde dinero
+- ❌ RSI sin filtro de régimen → pierde
+- ❌ Más de 3 condiciones → sobrecomplejidad
 
-Resultados anteriores (NO REPITAS):
+Contexto: {market_context}
+Resultados recientes (inspírate pero no copies):
 {previous_results}
 
-Genera EXACTAMENTE {n} estrategias en formato JSON.
-Cada estrategia: name, entry_conditions (1-3), exit (tp_pct, sl_pct, horizon_bars).
-JSON array, sin markdown, sin explicación extra.
-[{{"name": "...", "entry_conditions": [...], "exit": {{...}}}}]
+Genera EXACTAMENTE {n} estrategias. Devuelve SOLO un array JSON, sin markdown.
+Ejemplo: [{{"name": "estrat_1", "entry_conditions": [{{"indicator": "adx", "op": "lt", "value": 15}}], "exit": {{"tp_pct": 0.04, "sl_pct": 0.015, "horizon_bars": 48}}}}]
 """
 
 ANALYST_SYSTEM = """Eres un analista cuantitativo experto en trading de BTC.
@@ -78,7 +43,6 @@ Estrategia evaluada (JSON):
 {strategy_json}
 
 Resultados del backtest:
-- Periodo: {days} días, timeframe {timeframe}
 - Sharpe: {sharpe}
 - WinRate: {win_rate:.1%}
 - Profit Factor: {profit_factor}
@@ -87,7 +51,7 @@ Resultados del backtest:
 - Max Drawdown: ${max_dd}
 - Passes Gates: {passes_gates}
 
-Contexto de mercado durante el periodo:
+Contexto de mercado:
 {market_context}
 
 Debes devolver un JSON con esta estructura exacta:
