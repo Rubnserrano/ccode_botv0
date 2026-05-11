@@ -96,6 +96,10 @@ TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode" .venv/bin/python3 -m
 - Phase 11: Strategy DSL prep (Strategy dataclass), walk-forward, evolution engine, genealogy
 - Phase 12: Paper trading (PaperAccount, runner, decoupled Streamlit dashboard)
 - Phase 13: Feature Store (precomputed indicators in Parquet, builder CLI, real-time updates)
+- Phase 14: Parallel backtests CLI (--parallel flag, --tp, --sl flags)
+- Phase 15: Strategy Engine — JSON-defined strategies via evaluator
+- Phase 16: Automated research loop with progressive leaderboard
+- Phase 17: LLM Brain — Strategist + Analyst via OpenRouter (deepseek-chat)
 
 ## How to Add a New Indicator (Feature)
 
