@@ -267,7 +267,7 @@ async def main():
     global _telegram
     if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
         _telegram = True
-        await _maybe_notify("start", args.rounds, args.n, args.days, args.resample)
+        await _maybe_notify("start", args.rounds, args.n, args.days, args.resample, market_ctx)
         start_time = time.time()
     else:
         _telegram = None
@@ -320,7 +320,7 @@ async def main():
                     await _maybe_notify("digest",
                         elapsed_h, len(all_results), len(positive),
                         best_all["sharpe"], round_num + 1, llm.total_cost,
-                        top3,
+                        top3, results,
                     )
                     last_digest_time = time.time()
 
@@ -338,13 +338,14 @@ async def main():
         print("Audit log: data/parquet/brain/audit.jsonl", flush=True)
 
         # Final digest
-        if _telegram and all_results:
+        if _telegram:
             elapsed_h = (time.time() - start_time) / 3600 if _telegram else 0
             positive = [r for r in all_results if r["sharpe"] > 0 and r["n_trades"] >= 30]
             best_all = max(all_results, key=lambda r: r["sharpe"]) if all_results else {"sharpe": 0, "run_id": ""}
             await _maybe_notify("done",
                 elapsed_h, len(all_results), len(positive),
                 best_all["sharpe"], best_all.get("run_id", ""), llm.total_cost,
+                all_results,
             )
 
 

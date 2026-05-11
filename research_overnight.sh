@@ -1,32 +1,26 @@
 #!/bin/bash
-# Overnight autonomous research loop — resilient version.
+# Overnight autonomous research loop — resilient v3.
 #
-# Features:
-#   - Auto-restarts on crash (max 3 retries per round)
-#   - 10 min per-round timeout (never hangs forever)
-#   - Container health check before each round
-#   - Sends Telegram notifications on findings
-#   - Runs for ~8 hours or until stopped
+# Wraps each round in a subshell to isolate signals.
+# Logs signal type for debugging.
 #
 # Usage:
 #   TELEGRAM_BOT_TOKEN="xxx" TELEGRAM_CHAT_ID="yyy" \
 #   OPENROUTER_API_KEY="sk-or-..." \
-#     nohup bash research_overnight.sh &
+#     nohup bash research_overnight.sh >> /tmp/overnight.log 2>&1 &
 #
-# Logs: /tmp/overnight.log
 # To stop: kill $(cat /tmp/overnight.pid)
-set -e
 
 API_KEY="${OPENROUTER_API_KEY}"
 if [ -z "$API_KEY" ]; then
-    echo "ERROR: OPENROUTER_API_KEY no está definida."
-    echo "Usa: OPENROUTER_API_KEY='sk-or-...' nohup bash research_overnight.sh &"
+    echo "[$(date)] ERROR: OPENROUTER_API_KEY no definida"
+    echo "[$(date)Uso: OPENROUTER_API_KEY='sk-or-...' nohup bash research_overnight.sh &"
     exit 1
 fi
 
-MAX_SECONDS=28800       # 8 hours total
-ROUND_TIMEOUT=600       # 10 min per round (never hangs longer)
-MAX_RETRIES=3           # max retries per round before skipping
+MAX_SECONDS=28800       # 8h
+ROUND_TIMEOUT=600       # 10min max per round
+MAX_RETRIES=3
 START_TS=$(date +%s)
 ROUND=1
 PID_FILE="/tmp/overnight.pid"
@@ -39,7 +33,7 @@ export TELEGRAM_CHAT_ID
 export OPENROUTER_API_KEY
 
 cleanup() {
-    echo "[$(date)] === Received signal. Cleaning up... ==="
+    echo "[$(date)] === CLEANUP exit ==="
     rm -f "$PID_FILE"
     exit 0
 }
@@ -51,57 +45,57 @@ while true; do
     REMAINING=$((MAX_SECONDS - ELAPSED))
 
     if [ $ELAPSED -ge $MAX_SECONDS ]; then
-        echo "[$(date)] === Max time reached ($MAX_SECONDS s). Exiting. ==="
+        echo "[$(date)] === Max time reached ($MAX_SECONDS s) ==="
         break
     fi
 
     echo ""
-    echo "[$(date)] === Round $ROUND — ${ELAPSED}s elapsed, ${REMAINING}s remaining ==="
+    echo "=== Round $ROUND — ${ELAPSED}s elapsed, ${REMAINING}s remaining ==="
     echo ""
 
     # Container health check
     if ! docker compose ps app 2>/dev/null | grep -q "healthy"; then
-        echo "[$(date)] Container not healthy. Restarting..."
+        echo "[$(date)] ⚠ Container not healthy. Restarting..."
         docker compose restart app 2>/dev/null || docker compose up -d app 2>/dev/null
         sleep 15
     fi
 
-    # Run one round with forced timeout
+    # Run ONE round in a subshell to isolate signals
     ROUND_START=$(date +%s)
-    timeout "$ROUND_TIMEOUT" docker compose exec -T \
-        -e OPENROUTER_API_KEY="$API_KEY" \
-        -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
-        -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
-        app python -m src.brain.orchestrator \
-        --n 15 --days 365 --resample 15m \
-        --rounds 1 --api-key "$API_KEY"
-
+    (
+        exec timeout "$ROUND_TIMEOUT" docker compose exec -T \
+            -e OPENROUTER_API_KEY="$API_KEY" \
+            -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+            app python -m src.brain.orchestrator \
+            --n 15 --days 365 --resample 15m \
+            --rounds 1 --digest-minutes 5 --api-key "$API_KEY"
+    )
     EXIT_CODE=$?
     ROUND_ELAPSED=$(($(date +%s) - ROUND_START))
-    echo "[$(date)] Round $ROUND finished in ${ROUND_ELAPSED}s (exit code $EXIT_CODE)"
+
+    echo "[$(date)] Round $ROUND done in ${ROUND_ELAPSED}s (exit=$EXIT_CODE)"
 
     ROUND=$((ROUND + 1))
 
-    if [ $EXIT_CODE -eq 0 ]; then
-        RETRIES=0
-        sleep 3
-    elif [ $EXIT_CODE -eq 124 ]; then
-        echo "[$(date)] ⚠ Round timed out after ${ROUND_TIMEOUT}s. Retrying..."
+    if [ $EXIT_CODE -eq 124 ]; then
+        echo "[$(date)] ⏱ Timeout after ${ROUND_TIMEOUT}s"
         RETRIES=$((RETRIES + 1))
-        sleep 5
+    elif [ $EXIT_CODE -ne 0 ]; then
+        echo "[$(date)] ⚠ Crash (code $EXIT_CODE)"
+        RETRIES=$((RETRIES + 1))
     else
-        echo "[$(date)] ⚠ Round crashed (code $EXIT_CODE). Retrying..."
-        RETRIES=$((RETRIES + 1))
-        sleep 10
+        RETRIES=0
     fi
 
-    # Max retries: skip this round and move on
     if [ $RETRIES -ge $MAX_RETRIES ]; then
-        echo "[$(date)] ❌ Max retries reached. Moving on..."
+        echo "[$(date)] ❌ Max retries. Moving to next round."
         RETRIES=0
-        sleep 30
+        sleep 10
+    else
+        sleep 2
     fi
 done
 
-echo "[$(date)] === Research finished after $ROUND rounds ==="
+echo "[$(date)] === Research finished ==="
 rm -f "$PID_FILE"
