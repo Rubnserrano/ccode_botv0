@@ -1,0 +1,20 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ccode-timescaledb
+    environment:
+      POSTGRES_PASSWORD: ccode
+      POSTGRES_DB: ccode
+      POSTGRES_USER: ccode
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccode -d ccode"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  timescale_data:

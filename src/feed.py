@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from inspect import iscoroutine
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -131,16 +132,26 @@ class Candle:
 
 @dataclass
 class CandleBuffer:
-    """Rolling buffer of 1m candles (max 100). Tracks gaps."""
+    """Rolling buffer of 1m candles (max 100). Tracks gaps.
+
+    If ``on_close`` is provided, it is called with the Candle each time
+    a newly closed candle is appended (deduplicated by open_time_ms).
+    """
     symbol: str
     max_candles: int = 100
+    on_close: Optional[callable] = None
     _candles: deque = field(default_factory=deque)
     _last_open_time_ms: Optional[int] = None
     _gaps: list[dict] = field(default_factory=list)
+    _closed_set: set = field(default_factory=set)
 
     def add(self, candle: Candle):
         if self._candles and self._candles[-1].open_time_ms == candle.open_time_ms:
+            was_closed = self._candles[-1].is_closed
             self._candles[-1] = candle
+            if candle.is_closed and not was_closed and candle.open_time_ms not in self._closed_set:
+                self._closed_set.add(candle.open_time_ms)
+                self._fire_on_close(candle)
         else:
             if self._last_open_time_ms is not None:
                 expected = self._last_open_time_ms + 60_000
@@ -152,8 +163,18 @@ class CandleBuffer:
                     })
             self._last_open_time_ms = candle.open_time_ms
             self._candles.append(candle)
+            if candle.is_closed and candle.open_time_ms not in self._closed_set:
+                self._closed_set.add(candle.open_time_ms)
+                self._fire_on_close(candle)
             while len(self._candles) > self.max_candles:
-                self._candles.popleft()
+                old = self._candles.popleft()
+                self._closed_set.discard(old.open_time_ms)
+
+    def _fire_on_close(self, candle: Candle):
+        if self.on_close:
+            result = self.on_close(candle)
+            if iscoroutine(result):
+                asyncio.create_task(result)
 
     def detect_gaps(self) -> list[dict]:
         return list(self._gaps)

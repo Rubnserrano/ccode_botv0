@@ -1,16 +1,20 @@
 """Main ingestion orchestrator.
 
 Startup:
-  1. Check DataStore — download historical data if empty
-  2. Create in-memory buffers (Price, Trade, Candle)
-  3. Start WebSocket streams (ticker + trades/klines)
-  4. Snapshot writer every 500ms → data/live_state.json
-  5. Terminal report every 30s
-  6. Graceful shutdown on SIGINT/SIGTERM
+  1. Connect to TimescaleDB + init schema (hypertable, continuous aggregates)
+  2. Check DataStore — download historical data if empty
+  3. Sync Parquet → TimescaleDB incrementally
+  4. Create in-memory buffers (Price, Trade, Candle) with on_close persist
+  5. Start WebSocket streams (ticker + trades/klines)
+  6. Snapshot writer every 500ms → data/live_state.json
+  7. Terminal report every 30s
+  8. Graceful shutdown on SIGINT/SIGTERM
 
 Usage:
+    export TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode"
     python -m src.main
-    python -m src.main --symbols btcusdt,ethusdt --days 365
+    python -m src.main --skip-download    # skip download + sync
+    python -m src.main --no-tsdb          # skip TimescaleDB entirely
 """
 from __future__ import annotations
 
@@ -20,12 +24,13 @@ import json
 import logging
 import os
 import signal
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
+
 from src.download import download_symbol
-from src.store import available_range, row_count
+from src.store import available_range, row_count, write
 from src.feed import (
     PriceBuffer, TradeBuffer, CandleBuffer,
     stream_tickers, stream_trades_and_klines,
@@ -35,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 EXCHANGE = "binance"
+
+TIMESCALE_DSN = os.getenv("TIMESCALE_DSN", "postgres://ccode:ccode@localhost:5432/ccode")
 
 
 def _live_state_path() -> Path:
@@ -90,6 +97,7 @@ async def _report_svc(
     prices: dict[str, PriceBuffer],
     trades: dict[str, TradeBuffer],
     candles: dict[str, CandleBuffer],
+    tsdb=None,
 ):
     while True:
         await asyncio.sleep(30)
@@ -108,6 +116,13 @@ async def _report_svc(
             cvd = tb.cvd_1m if tb else 0
             ready = cb.candle_count if cb else 0
             lines.append(f"  {asset}: ${price:,.2f}  30s={ret_s}  CVD={cvd:+.0f}  candles={ready}")
+        if tsdb and tsdb.pool:
+            try:
+                async with tsdb.pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT COUNT(*) FROM ohlcv")
+                    lines.append(f"  TimescaleDB: {row['count']:,} rows" if row else "")
+            except Exception:
+                lines.append("  TimescaleDB: ?")
         print("\n".join(lines))
 
 
@@ -116,8 +131,9 @@ async def _report_svc(
 async def main():
     parser = argparse.ArgumentParser(description="BTC data ingestion orchestrator")
     parser.add_argument("--symbols", default="btcusdt", help="Comma-separated symbols")
-    parser.add_argument("--days", type=int, default=90, help="Days of history if empty")
-    parser.add_argument("--skip-download", action="store_true", help="Skip historical download")
+    parser.add_argument("--days", type=int, default=862, help="Days of history if empty (default: 862 ~ Jan 2024)")
+    parser.add_argument("--skip-download", action="store_true", help="Skip historical download + sync")
+    parser.add_argument("--no-tsdb", action="store_true", help="Skip TimescaleDB entirely")
     args = parser.parse_args()
 
     symbols = [s.strip().lower() for s in args.symbols.split(",")]
@@ -127,6 +143,17 @@ async def main():
         level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
         format="%(levelname)s:%(name)s:%(message)s",
     )
+
+    tsdb = None
+    if not args.no_tsdb:
+        try:
+            from src.tsdb import TimescaleDB
+            tsdb = TimescaleDB()
+            await tsdb.connect(TIMESCALE_DSN)
+            logger.info("orchestrator: TimescaleDB connected")
+        except Exception as e:
+            logger.warning("orchestrator: TimescaleDB unavailable (%s) — running without it", e)
+            tsdb = None
 
     logger.info("orchestrator: starting — symbols=%s", symbols)
 
@@ -141,7 +168,16 @@ async def main():
                 start, end = available_range(EXCHANGE, symbol)
                 logger.info("orchestrator: %s has %d rows (%s → %s)", symbol, n, start, end)
 
-    # 2) In-memory buffers
+    # 2) Sync Parquet → TimescaleDB
+    if tsdb:
+        for symbol in symbols:
+            try:
+                n = await tsdb.sync_from_parquet(EXCHANGE, symbol.lower())
+                logger.info("orchestrator: synced %d rows to TimescaleDB for %s", n, symbol)
+            except Exception as e:
+                logger.warning("orchestrator: sync failed for %s: %s", symbol, e)
+
+    # 3) In-memory buffers + on_close callback
     price_buffers: dict[str, PriceBuffer] = {}
     trade_buffers: dict[str, TradeBuffer] = {}
     candle_buffers: dict[str, CandleBuffer] = {}
@@ -149,16 +185,16 @@ async def main():
     for asset in assets:
         price_buffers[asset] = PriceBuffer(asset)
         trade_buffers[asset] = TradeBuffer(asset)
-        candle_buffers[asset] = CandleBuffer(asset)
+        candle_buffers[asset] = CandleBuffer(asset, on_close=_candle_closed(asset, tsdb))
 
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
-    # 3) Start services
+    # 4) Start services
     tasks = [
         asyncio.create_task(stream_tickers(symbols, price_buffers, tick_queue)),
         asyncio.create_task(stream_trades_and_klines(symbols, trade_buffers, candle_buffers)),
         asyncio.create_task(_snapshot_svc(price_buffers, trade_buffers, candle_buffers)),
-        asyncio.create_task(_report_svc(price_buffers, trade_buffers, candle_buffers)),
+        asyncio.create_task(_report_svc(price_buffers, trade_buffers, candle_buffers, tsdb)),
     ]
 
     def _shutdown():
@@ -170,7 +206,7 @@ async def main():
         try:
             loop.add_signal_handler(sig, _shutdown)
         except NotImplementedError:
-            pass  # Windows
+            pass
 
     logger.info("orchestrator: running — %d services", len(tasks))
     try:
@@ -178,7 +214,44 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
+        if tsdb:
+            await tsdb.close()
         logger.info("orchestrator: stopped")
+
+
+def _candle_closed(asset: str, tsdb):
+    """Return a callback that persists closed candles to Parquet + TimescaleDB."""
+    symbol_upper = f"{asset.upper()}USDT"
+
+    async def _on_close(candle):
+        row_df = pd.DataFrame([{
+            "ts": datetime.fromtimestamp(candle.open_time_ms / 1000, tz=timezone.utc),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }])
+        try:
+            write(EXCHANGE, symbol_upper, row_df)
+        except Exception as e:
+            logger.error("persist: parquet write failed: %s", e)
+
+        if tsdb:
+            try:
+                await tsdb.insert_candle(
+                    ts=datetime.fromtimestamp(candle.open_time_ms / 1000, tz=timezone.utc),
+                    symbol=symbol_upper,
+                    open_p=candle.open,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    volume=candle.volume,
+                )
+            except Exception as e:
+                logger.error("persist: tsdb insert failed: %s", e)
+
+    return _on_close
 
 
 if __name__ == "__main__":
