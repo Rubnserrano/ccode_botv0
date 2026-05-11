@@ -106,4 +106,4 @@ async def generate_strategies(
 
     extra = f" + {new_indicators_count} new indicators" if new_indicators_count else ""
     logger.info("brain: strategist generated %d strategies%s", len(strategies), extra)
-    return strategies
+    return strategies, new_indicators_count

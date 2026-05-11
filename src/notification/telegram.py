@@ -94,15 +94,55 @@ async def notify_digest(
     best_sharpe: float,
     rounds_completed: int,
     total_cost: float,
+    top_strategies: list[dict] | None = None,
 ) -> None:
-    """Send a progress digest."""
+    """Send a progress digest with top strategies."""
     msg = (
         f"⏰ *Digest — {elapsed_h:.1f}h transcurridas*\n"
         f"• Estrategias probadas: `{n_tested}`\n"
         f"• Con Sharpe > 0: `{n_positive}`\n"
         f"• Mejor Sharpe: `{best_sharpe:+.2f}`\n"
-        f"• Roundas completadas: `{rounds_completed}`\n"
+        f"• Rondas completadas: `{rounds_completed}`\n"
         f"• Costo total LLM: `${total_cost:.4f}`\n"
+    )
+    if top_strategies:
+        msg += f"\n*Top 3 de la sesión:*\n"
+        for i, s in enumerate(top_strategies[:3], 1):
+            s_name = s.get("run_id", "?")[:30]
+            msg += f"`{i}. {s_name}` S={s['sharpe']:+.2f} WR={s['win_rate']:.0%} PF={s['profit_factor']:.2f} T={s['n_trades']}\n"
+    await _send(msg)
+
+
+async def notify_hourly_leaderboard(
+    elapsed_h: float,
+    all_results: list[dict],
+) -> None:
+    """Send an hourly detailed leaderboard."""
+    sorted_results = sorted(
+        [r for r in all_results if r.get("n_trades", 0) >= 10],
+        key=lambda r: r["sharpe"], reverse=True,
+    )
+    if not sorted_results:
+        await _send(f"⏰ *Hora {elapsed_h:.0f}* — Sin estrategias con suficientes trades aun.")
+        return
+
+    msg = f"🏆 *Leaderboard hora {elapsed_h:.0f}* ({len(sorted_results)} estrategias)\n\n"
+    for i, r in enumerate(sorted_results[:5], 1):
+        msg += (
+            f"`{i}.` `{r['run_id'][:30]:30s}`\n"
+            f"    S=`{r['sharpe']:+.2f}`  WR=`{r['win_rate']:.0%}`  "
+            f"PF=`{r['profit_factor']:.2f}`  PnL=`${r['total_pnl']:+.0f}`  "
+            f"T=`{r['n_trades']}`\n"
+        )
+    await _send(msg)
+
+
+async def notify_new_indicator(name: str, formula: str, source: str = "LLM") -> None:
+    """Notify that a new indicator was created."""
+    msg = (
+        f"🧪 *Nuevo indicador creado por {source}*\n"
+        f"Nombre: `{name}`\n"
+        f"Formula: `{formula[:100]}`"
     )
     await _send(msg)
 

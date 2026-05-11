@@ -38,12 +38,15 @@ async def _maybe_notify(method: str, *args, **kwargs) -> None:
     if _telegram is not None:
         try:
             from src.notification.telegram import (
-                notify_start, notify_strategy_found, notify_digest, notify_done,
+                notify_start, notify_strategy_found, notify_digest,
+                notify_hourly_leaderboard, notify_new_indicator, notify_done,
             )
             func = {
                 "start": notify_start,
                 "strategy": notify_strategy_found,
                 "digest": notify_digest,
+                "hourly": notify_hourly_leaderboard,
+                "new_indicator": notify_new_indicator,
                 "done": notify_done,
             }.get(method)
             if func:
@@ -92,7 +95,14 @@ async def run_round(
       Analyst:          Solo sobrevivientes (menos costo LLM).
     """
     past_results = load_leaderboard().tail(15).to_dict("records")
-    strategies = await generate_strategies(llm, market_ctx, past_results, n)
+    gen_result = await generate_strategies(llm, market_ctx, past_results, n)
+    if isinstance(gen_result, tuple):
+        strategies, new_ind_count = gen_result
+        if new_ind_count > 0:
+            logger.info("orchestrator: %d new indicators registered by LLM", new_ind_count)
+            await _maybe_notify("new_indicator", "LLM Auto-Discovery", f"{new_ind_count} nuevos indicadores", "LLM")
+    else:
+        strategies = gen_result
     if not strategies:
         logger.warning("orchestrator: no strategies generated")
         return []
@@ -223,7 +233,7 @@ async def main():
     parser.add_argument("--resample", type=str, default="15m", help="Timeframe")
     parser.add_argument("--symbol", type=str, default="btcusdt")
     parser.add_argument("--rounds", type=int, default=1, help="Number of rounds")
-    parser.add_argument("--digest-minutes", type=int, default=45, help="Telegram digest interval (min)")
+    parser.add_argument("--digest-minutes", type=int, default=15, help="Telegram digest interval (min)")
     parser.add_argument("--api-key", type=str, default=None, help="OpenRouter key")
     args = parser.parse_args()
 
@@ -301,16 +311,26 @@ async def main():
                             json.dumps(rules.get("entry_conditions", []), indent=2),
                         )
 
-                # Digest configurable
+                # Digest configurable (default 15 min)
                 if time.time() - last_digest_time > args.digest_minutes * 60:
                     elapsed_h = (time.time() - start_time) / 3600
                     positive = [r for r in all_results if r["sharpe"] > 0 and r["n_trades"] >= 30]
                     best_all = max(all_results, key=lambda r: r["sharpe"]) if all_results else {"sharpe": 0}
+                    top3 = sorted(all_results, key=lambda r: r["sharpe"], reverse=True)[:3] if all_results else []
                     await _maybe_notify("digest",
                         elapsed_h, len(all_results), len(positive),
                         best_all["sharpe"], round_num + 1, llm.total_cost,
+                        top3,
                     )
                     last_digest_time = time.time()
+
+                # Hourly leaderboard
+                _elapsed_h = (time.time() - start_time) / 3600
+                _last_hourly = getattr(_maybe_notify, "_last_hourly", 0)
+                _latest_hour = int(_elapsed_h)
+                if _latest_hour > _last_hourly and _latest_hour >= 1:
+                    _maybe_notify._last_hourly = _latest_hour
+                    await _maybe_notify("hourly", _elapsed_h, all_results)
 
     finally:
         await llm.close()
