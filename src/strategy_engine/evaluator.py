@@ -15,6 +15,9 @@ from src.strategy_engine.schema import StrategyDef, Condition, validate_strategy
 
 logger = logging.getLogger(__name__)
 
+# Cache for auto-discovered sources (avoid repeated lookups)
+_auto_discovery_cache: set = set()
+
 
 def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
     """Evaluate strategy rules against a DataFrame.
@@ -35,7 +38,19 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
     def _cached_indicator(name: str, params: dict) -> pd.Series:
         key = (name, frozenset((k, v) for k, v in sorted(params.items())))
         if key not in _cache:
-            _cache[key] = calc_indicator(name, df, params)
+            try:
+                _cache[key] = calc_indicator(name, df, params)
+            except ValueError:
+                # Indicator not found — try auto-discovery from external sources
+                if name not in _auto_discovery_cache:
+                    _auto_discovery_cache.add(name)
+                    from src.intelligence.registry import try_auto_discover
+                    if try_auto_discover(name):
+                        _cache[key] = calc_indicator(name, df, params)
+                        return _cache[key]
+                # Still not found — return zeros
+                logger.warning("evaluator: indicator '%s' not found (returning zeros)", name)
+                return pd.Series(0.0, index=df.index)
         return _cache[key]
 
     def _eval(cond: Condition, i: int) -> bool:

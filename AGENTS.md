@@ -302,47 +302,101 @@ docker compose exec -d app python -m uvicorn api.app:app --host 0.0.0.0 --port 8
 
 ### Adding a New Data Source
 
-The system is designed to ingest data from any source. The pipeline:
-
-> ⚠️ **Note:** The `DataSource` base class and `GenericFetcher` are part of the architecture vision.
-> Currently, adding a new source requires creating a custom fetcher in `src/intelligence/` and
-> rebuilding the Feature Store. The abstraction layer will be implemented in a future phase.
+Any agent can register a new external data source at runtime.
+A registered source costs ~1KB on disk. It is NOT fetched until:
+  a) A strategy references its column
+  b) An agent calls `POST /data-sources/{name}/fetch`
 
 ```
-External API (FRED, news, whales, etc.)
-  → GenericFetcher downloads + transforms
-  → data/external/{source}/{YYYY-MM}.parquet
-  → Aligner resamples to 15m/1h
-  → Feature Store rebuild includes new columns
-  → Any strategy JSON can use them
+POST /data-sources (register)
+  ↓
+data/sources/{name}.json  (1KB, 0 CPU)
+  ↓ (first use triggers fetch)
+data/external/{name}/{YYYY-MM}.parquet  (raw data)
+  ↓ (aligner)
+data/external_aligned/{timeframe}/{name}.parquet  (regular timestamps)
+  ↓ (feature rebuild)
+data/features/btcusdt/{YYYY-MM}.parquet  (column available)
+  ↓ (strategy uses it)
+{"indicator": "vix", "op": "lt", "value": 25}  ← auto-discovered
 ```
 
-To add a new source, create a file in `src/intelligence/` following this pattern:
+#### Registering a Data Source
 
-```python
-"""src/intelligence/fred_feed.py — FRED macro data fetcher."""
-
-from src.intelligence.base import DataSource
-
-class FredFeed(DataSource):
-    name = "fred"
-    schedule = "1h"
-    url = "https://api.stlouisfed.org/fred/series/..."
-
-    async def fetch(self) -> pd.DataFrame:
-        resp = await httpx.get(self.url, params={"series_id": "VIXCLS", ...})
-        data = resp.json()
-        return pd.DataFrame({
-            "ts": pd.to_datetime(...),
-            "vix": data["observations"]["value"],
-        })
+```bash
+curl -X POST http://localhost:8000/data-sources \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "fred_vix",
+    "url": "https://api.stlouisfed.org/fred/series/observations",
+    "description": "VIX volatility index",
+    "params": {"series_id": "VIXCLS", "file_type": "json"},
+    "api_key": "your_fred_api_key",
+    "schedule": "1h",
+    "parse": {
+      "type": "json",
+      "timestamp_field": "observations[].date",
+      "value_field": "observations[].value",
+      "value_transform": "float"
+    },
+    "columns": {"value": "vix"},
+    "align": {
+      "method": "ffill",
+      "decay_periods": 0,
+      "target_timeframes": ["15m", "1h"]
+    }
+  }'
 ```
 
-The base class handles:
-- Automatic periodic fetching
-- Parquet storage in `data/external/{name}/`
-- Timestamp alignment with OHLCV data
-- Feature Store integration
+#### Definition Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | ✅ | Unique identifier (alphanumeric + underscores) |
+| `url` | ✅ | HTTPS endpoint |
+| `schedule` | ✅ | Fetch interval: "5m", "1h", "1d" |
+| `parse.type` | ✅ | "json" or "csv" |
+| `parse.timestamp_field` | ✅ | Dotted path to timestamp field (supports arrays: `obs[].date`) |
+| `parse.value_field` | ✅ | Dotted path to value field |
+| `columns` | ✅ | Map `{"value": "vix"}` — column name in Feature Store |
+| `align.method` | ✅ | "ffill", "interpolate", "sum", "avg" |
+| `api_key` | ❌ | API key (stored in JSON, unencrypted for POC) |
+
+#### Fetching and Using
+
+```bash
+# Force fetch immediately
+curl -X POST http://localhost:8000/data-sources/fred_vix/fetch
+
+# The column is now available in any strategy
+```
+
+```json
+{"indicator": "vix", "op": "lt", "value": 25}
+```
+
+#### Response on Fetch
+
+```json
+{
+  "status": "fetched",
+  "name": "fred_vix",
+  "rows": 365,
+  "columns": ["vix"],
+  "timeframes": ["15m", "1h"]
+}
+```
+
+#### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| **No historical data** (new source) | Only data from first fetch. Backtest limited to that range |
+| **Payload > 1MB** | Truncates to last 365 days |
+| **Irregular timestamps** (news) | Aligner does ffill with optional decay |
+| **API down** | Column has NaN. Strategies don't generate signals |
+| **Duplicate registration** | 409 Conflict — use DELETE first |
+| **News/sentiment** | Multiple events per vela → averaged |
 
 ### Running Research via API
 

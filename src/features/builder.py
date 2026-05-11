@@ -54,6 +54,17 @@ def build_features(symbol: str, rebuild: bool = False) -> int:
 
     t0 = time.time()
     df = calc_all(df)
+
+    # Merge aligned external data sources
+    ext_dir = Path("data/external_aligned/15m")
+    if ext_dir.exists():
+        for ext_file in sorted(ext_dir.glob("*.parquet")):
+            src_name = ext_file.stem
+            ext_df = pd.read_parquet(ext_file)
+            ext_df["ts"] = pd.to_datetime(ext_df["ts"], utc=True)
+            df = df.merge(ext_df, on="ts", how="left")
+            logger.info("features: merged external '%s' (%d cols)", src_name, len(ext_df.columns) - 1)
+
     calc_time = time.time() - t0
 
     n = f_write(sym, df)
