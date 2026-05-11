@@ -39,8 +39,8 @@ def backtest(
     df : pd.DataFrame
         OHLCV + indicators (output of calc_all). Must have:
         ts, open, high, low, close, volume + indicator columns.
-    strategy_fn : callable
-        Function (df) -> pd.Series with values 1 (BUY), -1 (SELL), 0 (HOLD).
+    strategy_fn : callable or Strategy
+        Function (df) -> pd.Series or ``Strategy`` object.
     horizon : int
         Number of bars to hold each position.
     warmup : int
@@ -71,7 +71,10 @@ def backtest(
         return pd.DataFrame(), {"error": "empty DataFrame"}
 
     run_id = run_id or uuid.uuid4().hex[:12]
-    signals = strategy_fn(df)
+    if hasattr(strategy_fn, "generate"):
+        signals = strategy_fn.generate(df)
+    else:
+        signals = strategy_fn(df)
 
     trades = []
     last_entry = -cooldown - 1
