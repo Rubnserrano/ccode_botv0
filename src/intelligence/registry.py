@@ -17,6 +17,8 @@ import json
 import logging
 from pathlib import Path
 
+from pathlib import Path
+
 import pandas as pd
 
 from src.intelligence.models import DataSource, ParseConfig, AlignConfig, RateLimit
@@ -174,8 +176,26 @@ def try_auto_discover(name: str) -> bool:
 
 
 def _register_column(name: str) -> None:
-    """Register a source column as a passthrough indicator in INDICATOR_REGISTRY."""
+    """Register a source column as an indicator that fetches from aligned data.
+
+    If the column doesn't exist in the DataFrame (no feature rebuild yet),
+    it loads from the aligned external Parquet.
+    """
     from src.strategy_engine.registry import INDICATOR_REGISTRY
-    if name not in INDICATOR_REGISTRY:
-        INDICATOR_REGISTRY[name] = lambda df, p, _n=name: df[_n] if _n in df.columns else pd.Series(0, index=df.index)
-        logger.info("source: registered column '%s' in INDICATOR_REGISTRY", name)
+    if name in INDICATOR_REGISTRY:
+        return
+
+    def _indicator_fn(df, p, _n=name):
+        if _n in df.columns:
+            return df[_n]
+        # Try loading from aligned external data
+        aligned_path = Path("data/external_aligned") / "15m" / f"{_n}.parquet"
+        if aligned_path.exists():
+            ext = pd.read_parquet(aligned_path)
+            ext["ts"] = pd.to_datetime(ext["ts"], utc=True)
+            result = df.merge(ext[["ts", _n]], on="ts", how="left")[_n].ffill()
+            return result
+        return pd.Series(0.0, index=df.index)
+
+    INDICATOR_REGISTRY[name] = _indicator_fn
+    logger.info("source: registered column '%s' in INDICATOR_REGISTRY", name)

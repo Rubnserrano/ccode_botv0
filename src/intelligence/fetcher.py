@@ -69,7 +69,24 @@ def _parse_response(text: str, source: DataSource) -> pd.DataFrame:
             if ts_val is None:
                 continue
             try:
-                ts = pd.to_datetime(ts_val, utc=True)
+                # Handle numeric timestamps (unit timestamp en segundos o milisegundos)
+                ts_numeric = None
+                if isinstance(ts_val, str):
+                    try:
+                        ts_numeric = float(ts_val)
+                    except ValueError:
+                        pass
+
+                if isinstance(ts_val, (int, float)) or ts_numeric is not None:
+                    ts_val_num = ts_numeric if ts_numeric is not None else ts_val
+                    if ts_val_num > 1_000_000_000_000:   # milisegundos
+                        ts = pd.to_datetime(ts_val_num / 1000, unit="s", utc=True)
+                    elif ts_val_num > 100_000_000:       # segundos
+                        ts = pd.to_datetime(ts_val_num, unit="s", utc=True)
+                    else:
+                        ts = pd.to_datetime(ts_val_num, utc=True)
+                else:
+                    ts = pd.to_datetime(ts_val, utc=True)
                 val = float(val_val) if parse.value_transform == "float" else (
                     int(val_val) if parse.value_transform == "int" else str(val_val)
                 )
