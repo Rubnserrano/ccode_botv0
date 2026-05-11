@@ -1,14 +1,12 @@
 """Main ingestion orchestrator.
 
 Startup:
-  1. Connect to TimescaleDB + init schema (hypertable, continuous aggregates)
-  2. Check DataStore — download historical data if empty
-  3. Sync Parquet → TimescaleDB incrementally
-  4. Create in-memory buffers (Price, Trade, Candle) with on_close persist
-  5. Start WebSocket streams (ticker + trades/klines)
-  6. Snapshot writer every 500ms → data/live_state.json
-  7. Terminal report every 30s
-  8. Graceful shutdown on SIGINT/SIGTERM
+  1. Connect to TimescaleDB + init schema
+  2. Create buffers + start WS streams (ticker + trades/klines) IMMEDIATELY
+  3. In background: download history if needed, sync to TimescaleDB
+  4. Snapshot every 500ms → data/live_state.json
+  5. Terminal report every 30s
+  6. Graceful shutdown on SIGINT/SIGTERM
 
 Usage:
     export TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode"
@@ -54,8 +52,13 @@ def _write_snapshot(
     prices: dict[str, PriceBuffer],
     trades: dict[str, TradeBuffer],
     candles: dict[str, CandleBuffer],
+    download_done: bool = False,
 ):
-    snapshot: dict = {"updated_at": datetime.now(timezone.utc).isoformat(), "assets": {}}
+    snapshot: dict = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "download_complete": download_done,
+        "assets": {},
+    }
     for asset in prices:
         pb = prices[asset]
         tb = trades.get(asset)
@@ -81,15 +84,58 @@ def _write_snapshot(
     _live_state_path().write_text(json.dumps(snapshot, indent=2))
 
 
+# ─── Background download + sync ──────────────────────────────────────────────
+
+async def _download_and_sync(
+    symbols: list[str],
+    days: int,
+    prices: dict[str, PriceBuffer],
+    trades: dict[str, TradeBuffer],
+    candles: dict[str, CandleBuffer],
+    tsdb,
+    notify_event: asyncio.Event,
+):
+    """Run historical download + TSDB sync in background.
+
+    WS streams are already running — this runs concurrently.
+    """
+    try:
+        for symbol in symbols:
+            n = row_count(EXCHANGE, symbol)
+            if n == 0:
+                logger.info("orchestrator: no data for %s, downloading %d days (background)", symbol, days)
+                await download_symbol(symbol.upper(), days=days)
+            else:
+                start, end = available_range(EXCHANGE, symbol)
+                logger.info("orchestrator: %s has %d rows (%s → %s)", symbol, n, start, end)
+
+        if tsdb:
+            for symbol in symbols:
+                try:
+                    n = await tsdb.sync_from_parquet(EXCHANGE, symbol.lower())
+                    logger.info("orchestrator: synced %d rows to TimescaleDB for %s", n, symbol)
+                except Exception as e:
+                    logger.warning("orchestrator: sync failed for %s: %s", symbol, e)
+    except Exception as e:
+        logger.error("orchestrator: background download/sync failed: %s", e)
+    finally:
+        notify_event.set()
+        logger.info("orchestrator: background download + sync complete")
+
+
 # ─── Services ────────────────────────────────────────────────────────────────
 
 async def _snapshot_svc(
     prices: dict[str, PriceBuffer],
     trades: dict[str, TradeBuffer],
     candles: dict[str, CandleBuffer],
+    download_event: asyncio.Event,
 ):
+    download_done = False
     while True:
-        _write_snapshot(prices, trades, candles)
+        if download_event.is_set() and not download_done:
+            download_done = True
+        _write_snapshot(prices, trades, candles, download_done)
         await asyncio.sleep(0.5)
 
 
@@ -144,6 +190,7 @@ async def main():
         format="%(levelname)s:%(name)s:%(message)s",
     )
 
+    # 1) TimescaleDB
     tsdb = None
     if not args.no_tsdb:
         try:
@@ -157,27 +204,7 @@ async def main():
 
     logger.info("orchestrator: starting — symbols=%s", symbols)
 
-    # 1) Historical download if needed
-    if not args.skip_download:
-        for symbol in symbols:
-            n = row_count(EXCHANGE, symbol)
-            if n == 0:
-                logger.info("orchestrator: no data for %s, downloading %d days", symbol, args.days)
-                await download_symbol(symbol.upper(), days=args.days)
-            else:
-                start, end = available_range(EXCHANGE, symbol)
-                logger.info("orchestrator: %s has %d rows (%s → %s)", symbol, n, start, end)
-
-    # 2) Sync Parquet → TimescaleDB
-    if tsdb:
-        for symbol in symbols:
-            try:
-                n = await tsdb.sync_from_parquet(EXCHANGE, symbol.lower())
-                logger.info("orchestrator: synced %d rows to TimescaleDB for %s", n, symbol)
-            except Exception as e:
-                logger.warning("orchestrator: sync failed for %s: %s", symbol, e)
-
-    # 3) In-memory buffers + on_close callback
+    # 2) Buffers (created immediately, WS will fill them)
     price_buffers: dict[str, PriceBuffer] = {}
     trade_buffers: dict[str, TradeBuffer] = {}
     candle_buffers: dict[str, CandleBuffer] = {}
@@ -189,13 +216,23 @@ async def main():
 
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
-    # 4) Start services
+    # 3) Background download signal
+    download_done = asyncio.Event()
+    if args.skip_download:
+        download_done.set()
+
+    # 4) Start all services (WS first, then background download)
     tasks = [
         asyncio.create_task(stream_tickers(symbols, price_buffers, tick_queue)),
         asyncio.create_task(stream_trades_and_klines(symbols, trade_buffers, candle_buffers)),
-        asyncio.create_task(_snapshot_svc(price_buffers, trade_buffers, candle_buffers)),
+        asyncio.create_task(_snapshot_svc(price_buffers, trade_buffers, candle_buffers, download_done)),
         asyncio.create_task(_report_svc(price_buffers, trade_buffers, candle_buffers, tsdb)),
     ]
+
+    if not args.skip_download:
+        tasks.append(asyncio.create_task(
+            _download_and_sync(symbols, args.days, price_buffers, trade_buffers, candle_buffers, tsdb, download_done)
+        ))
 
     def _shutdown():
         for t in tasks:
@@ -208,7 +245,7 @@ async def main():
         except NotImplementedError:
             pass
 
-    logger.info("orchestrator: running — %d services", len(tasks))
+    logger.info("orchestrator: running — %d services (WS live, download in background)", len(tasks))
     try:
         await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
