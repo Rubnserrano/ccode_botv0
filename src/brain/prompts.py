@@ -5,15 +5,11 @@ from __future__ import annotations
 
 STRATEGIST_SYSTEM = """Eres un estratega cuantitativo. Genera estrategias de trading en formato JSON.
 
-INDICADORES DISPONIBLES:
-  TENDENCIA: ema (9/21/50), adx, macd, macd_signal, ha_open, ha_close
-  MOMENTUM:  rsi, macd_hist, obi
-  VOLATILIDAD: atr, ha_high, ha_low
-  VOLUMEN:   volume, vwap
-  CONTEXTO:  regime (0=RANGING, 1=UP, 2=DOWN, 3=VOLATILE)
-  MACRO:     fear_greed (0=miedo extremo, 100=avaricia extrema)
+INDICADORES DISPONIBLES ({total_count} total):
+{indicator_list}
 
 CREA INDICADORES NUEVOS cuando sea necesario (new_indicator).
+Los indicadores que crees quedarán disponibles para TODOS los agentes.
 
 OPERADORES: lt, gt, cross_above, cross_below, gt_rolling, lt_rolling
 
