@@ -10,9 +10,35 @@ import logging
 
 from src.brain.llm_client import LLMClient
 from src.brain.prompts import STRATEGIST_SYSTEM
+from src.strategy_engine.registry import INDICATOR_REGISTRY
 from src.strategy_engine.generic_calculator import register_dynamic_indicator
 
 logger = logging.getLogger(__name__)
+
+# Built-in indicators (from calculator.py) — everything else is agent-created
+BUILTIN_INDICATORS = {
+    "close", "high", "low", "open", "volume",
+    "rsi", "ema", "macd", "macd_signal", "macd_hist",
+    "vwap", "obi", "atr", "adx", "regime",
+    "ha_close", "ha_open", "ha_high", "ha_low",
+    "fear_greed",
+}
+
+
+def _build_indicator_list() -> tuple[str, int]:
+    """Build a dynamic indicator list from the registry, grouped by source."""
+    all_inds = set(INDICATOR_REGISTRY.keys())
+    builtin = sorted(all_inds & BUILTIN_INDICATORS)
+    custom = sorted(all_inds - BUILTIN_INDICATORS)
+
+    lines = []
+    lines.append(f"  BUILT-IN ({len(builtin)}): {', '.join(builtin)}")
+    if custom:
+        lines.append(f"  CREADOS POR AGENTES ({len(custom)}): {', '.join(custom)}")
+    else:
+        lines.append("  CREADOS POR AGENTES: (ninguno aún — sé el primero en crear uno con new_indicator)")
+
+    return "\n".join(lines), len(all_inds)
 
 
 async def generate_strategies(
@@ -62,11 +88,14 @@ async def generate_strategies(
         best_example = "Aún no hay estrategias con Sharpe positivo. Explora combinaciones nuevas."
 
     user_prompt = f"Genera {n} estrategias para el contexto actual."
+    indicator_list, total_count = _build_indicator_list()
     system = STRATEGIST_SYSTEM.format(
         market_context=market_context,
         previous_results=prev_summary,
         best_example=best_example,
         n=n,
+        indicator_list=indicator_list,
+        total_count=total_count,
     )
 
     response = await llm.generate(

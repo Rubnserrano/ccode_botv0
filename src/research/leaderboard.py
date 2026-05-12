@@ -25,6 +25,9 @@ _SCHEMA_COLS = [
     "rules_json", "config_json",
     "elapsed_bt",
     "llm_model", "llm_explanation", "llm_suggestions", "llm_confidence",
+    # Out-of-sample (OOS) validation
+    "wf_sharpe", "wf_passes",
+    "oos_sharpe", "oos_trades", "overfit",
 ]
 
 
