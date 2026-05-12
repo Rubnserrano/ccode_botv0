@@ -145,10 +145,12 @@ class LLMClient:
     async def _call_model(
         self, model: str, system: str, user: str,
         response_format: str | None, max_tokens: int, temperature: float,
+        messages: list[dict] | None = None,
+        tools: list[dict] | None = None,
     ) -> dict:
         payload = {
             "model": model,
-            "messages": [
+            "messages": messages or [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
@@ -157,6 +159,8 @@ class LLMClient:
         }
         if response_format:
             payload["response_format"] = {"type": response_format}
+        if tools:
+            payload["tools"] = tools
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
