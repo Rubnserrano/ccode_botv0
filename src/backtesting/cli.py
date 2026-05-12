@@ -14,6 +14,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -33,7 +34,23 @@ def _list_strategies():
         print(f"  {name:25s}  {s.description}")
 
 
-def _load_data(symbol: str, days: int | None, exchange: str = "binance") -> pd.DataFrame:
+def _load_data(symbol: str, days: int | None, exchange: str = "binance", resample: str | None = None) -> pd.DataFrame:
+    # Load resampled data (e.g. 15m, 1h)
+    if resample:
+        path = Path("data/raw") / exchange / symbol / resample / "data.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"Resampled data not found: {path}\nRun: python -m src.resample --symbol {symbol.upper()} --to {resample}")
+        df = pd.read_parquet(path)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        if days:
+            cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+            df = df[df["ts"] >= cutoff]
+        print(f"  Resampled ({resample}): {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
+        t0 = time.time()
+        df = calc_all(df)
+        print(f"  Indicators: {time.time() - t0:.1f}s")
+        return df
+
     # Try features first (precomputed indicators)
     from src.features.store import read as f_read, available_range as f_range
     f_start, f_end = f_range(symbol)
@@ -176,6 +193,7 @@ def main():
     parser.add_argument("--size", type=float, default=50.0, help="Position size in USDC")
     parser.add_argument("--tp", type=float, default=0.005, help="Take profit fraction (default: 0.005)")
     parser.add_argument("--sl", type=float, default=0.005, help="Stop loss fraction (default: 0.005)")
+    parser.add_argument("--resample", type=str, default=None, help="Resample interval (e.g. 15m, 1h)")
     parser.add_argument("--list", action="store_true", help="List strategies and exit")
 
     # Walk-forward
@@ -210,7 +228,7 @@ def main():
     total_start = time.time()
 
     for sym in symbols:
-        df = _load_data(sym, args.days, exchange)
+        df = _load_data(sym, args.days, exchange, resample=args.resample)
 
         if args.evolve or args.walk_forward or args.parallel == 1:
             # Sequential (default)

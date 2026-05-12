@@ -10,6 +10,7 @@ import logging
 
 from src.brain.llm_client import LLMClient
 from src.brain.prompts import STRATEGIST_SYSTEM
+from src.strategy_engine.generic_calculator import register_dynamic_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -22,39 +23,49 @@ async def generate_strategies(
 ) -> list[dict]:
     """Generate N strategies using the LLM.
 
-    Parameters
-    ----------
-    llm : LLMClient
-        Connected LLM client.
-    market_context : str
-        Human-readable description of current market (regime dist, etc).
-    previous_results : list[dict]
-        Past strategy results from the leaderboard.
-    n : int
-        Number of strategies to generate.
-
     Returns
     -------
-    list[dict]
-        List of strategy dicts, each with name, entry_conditions, exit.
+    strategies : list[dict]
+        List of strategy dicts.
+    new_count : int
+        Number of new indicators created.
     """
-    # Build previous results summary (last 10 with trades)
+    # Build previous results summary
     prev_summary = ""
+    best_example = None
     if previous_results:
+        # Find the best strategy to use as inspiration
+        with_trades = [r for r in previous_results if r.get("n_trades", 0) > 0]
+        sorted_results = sorted(with_trades, key=lambda r: r["sharpe"], reverse=True)
+
+        if sorted_results:
+            best = sorted_results[0]
+            if best["sharpe"] > 0:
+                try:
+                    best_rules = json.loads(best.get("rules_json", "{}"))
+                    if best_rules:
+                        best_example = json.dumps(best_rules, indent=2)
+                except Exception:
+                    pass
+
         lines = []
-        for r in previous_results[:10]:
+        for r in sorted_results[:10]:
             s = r.get("sharpe", 0)
             pf = r.get("profit_factor", 0)
             nt = r.get("n_trades", 0)
             if nt > 0:
                 lines.append(f"  S={s:+.2f} PF={pf:.2f} T={nt}")
         if lines:
-            prev_summary = "Resultados recientes:\n" + "\n".join(lines)
+            prev_summary = "\n".join(lines)
+
+    if not best_example:
+        best_example = "Aún no hay estrategias con Sharpe positivo. Explora combinaciones nuevas."
 
     user_prompt = f"Genera {n} estrategias para el contexto actual."
     system = STRATEGIST_SYSTEM.format(
         market_context=market_context,
         previous_results=prev_summary,
+        best_example=best_example,
         n=n,
     )
 
@@ -71,39 +82,42 @@ async def generate_strategies(
             strategies = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("brain: LLM returned invalid JSON: %s", raw[:200])
-            return []
+            return [], 0
     elif isinstance(raw, list):
         strategies = raw
     else:
         logger.warning("brain: LLM returned unexpected type: %s", type(raw))
-        return []
+        return [], 0
 
-    new_indicators_count = 0
     if isinstance(strategies, dict):
-        ind_list = strategies.pop("_new_indicators", None) or strategies.pop("new_indicators", None)
         strategies = strategies.get("strategies") or strategies.get("entries") or list(strategies.values())
-        if ind_list:
-            new_indicators_count = len(ind_list)
-            logger.info("brain: LLM created %d new indicators!", new_indicators_count)
-            for ind in ind_list:
-                try:
-                    from src.strategy_engine.generic_calculator import register_dynamic_indicator
-                    register_dynamic_indicator(
-                        name=ind["name"],
-                        formula=ind["formula"],
-                        params=ind.get("params"),
-                        description=ind.get("description", "LLM-generated indicator"),
-                    )
-                except Exception as e:
-                    logger.warning("brain: failed to register indicator %s: %s", ind.get("name"), e)
-
-    if isinstance(strategies, dict) and "strategies" in strategies:
-        strategies = strategies["strategies"]
 
     if not isinstance(strategies, list):
         logger.warning("brain: expected list, got %s", type(strategies))
-        return []
+        return [], 0
 
-    extra = f" + {new_indicators_count} new indicators" if new_indicators_count else ""
-    logger.info("brain: strategist generated %d strategies%s", len(strategies), extra)
-    return strategies, new_indicators_count
+    # Handle per-strategy new_indicators
+    new_count = 0
+    clean_strategies = []
+    for s in strategies:
+        if not isinstance(s, dict):
+            continue
+        # Extract and register new_indicator if present
+        new_ind = s.pop("new_indicator", None) or s.pop("_new_indicator", None)
+        if new_ind:
+            try:
+                register_dynamic_indicator(
+                    name=new_ind["name"],
+                    formula=new_ind["formula"],
+                    params=new_ind.get("params"),
+                    description=new_ind.get("description", "LLM-generated"),
+                )
+                new_count += 1
+                logger.info("brain: created indicator '%s' = %s", new_ind["name"], new_ind["formula"])
+            except Exception as e:
+                logger.warning("brain: failed to register indicator: %s", e)
+        clean_strategies.append(s)
+
+    extra = f" + {new_count} new indicators" if new_count else ""
+    logger.info("brain: strategist generated %d strategies%s", len(clean_strategies), extra)
+    return clean_strategies, new_count

@@ -183,7 +183,8 @@ async def main():
     parser.add_argument("--days", type=int, default=862, help="Days of history if empty (default: 862 ~ Jan 2024)")
     parser.add_argument("--skip-download", action="store_true", help="Skip historical download + sync")
     parser.add_argument("--no-tsdb", action="store_true", help="Skip TimescaleDB entirely")
-    parser.add_argument("--paper", type=str, default=None, choices=["rsi_mean_reversion", "macd_crossover", "ema_trend", "vwap_bounce", "heikin_ashi_streak"],
+    parser.add_argument("--paper", type=str, default=os.getenv("PAPER_STRATEGY", None),
+                        choices=["rsi_mean_reversion", "macd_crossover", "ema_trend", "vwap_bounce", "heikin_ashi_streak"],
                         help="Enable paper trading with strategy name")
     args = parser.parse_args()
 
@@ -220,6 +221,10 @@ async def main():
         from src.paper.runner import PaperRunner
         paper_runner = PaperRunner(strategy_name=args.paper)
         logger.info("orchestrator: paper trading enabled — strategy=%s", args.paper)
+        for asset in assets:
+            symbol = f"{asset.upper()}USDT"
+            paper_runner.prefill(symbol, 200)
+            logger.info("orchestrator: paper prefill done for %s", symbol)
 
     for asset in assets:
         price_buffers[asset] = PriceBuffer(asset)

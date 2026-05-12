@@ -58,6 +58,38 @@ class PaperRunner:
         logger.info("paper: runner initialized — strategy=%s size=$%.0f horizon=%d tp=%.1f%% sl=%.1f%%",
                      strategy_name, size_usdc, horizon, tp_pct * 100, sl_pct * 100)
 
+    def prefill(self, symbol: str, n_candles: int = 200, exchange: str = "binance") -> None:
+        """Prefill buffer with historical data so indicators are ready immediately.
+
+        Reads from Feature Store (or falls back to raw+calc_all),
+        feeds candles into the buffer, and sets ``_bar_counter`` past warmup.
+        """
+        try:
+            from src.features.store import read as f_read, available_range as f_range
+            f_start, _ = f_range(symbol)
+            if f_start is not None:
+                df = f_read(symbol)
+            else:
+                from src.store import read as raw_read
+                df = raw_read(exchange, symbol)
+                from src.indicators.calculator import calc_all
+                df = calc_all(df)
+        except Exception as e:
+            logger.warning("paper: prefill failed (%s), will warm up live", e)
+            return
+
+        df = df.iloc[-n_candles:]
+        for _, row in df.iterrows():
+            self._candles.append({
+                "ts": row["ts"].value // 1_000_000,
+                "open": row["open"], "high": row["high"],
+                "low": row["low"], "close": row["close"],
+                "volume": row["volume"],
+            })
+
+        self._bar_counter = n_candles
+        logger.info("paper: prefill done — %d candles loaded, warmup skipped", n_candles)
+
     def on_candle_close(self, candle) -> None:
         """Called by CandleBuffer when a 1m candle closes."""
         self._bar_counter += 1

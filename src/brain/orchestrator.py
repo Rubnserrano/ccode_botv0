@@ -21,6 +21,7 @@ import pandas as pd
 from src.brain.llm_client import LLMClient
 from src.brain.strategist import generate_strategies
 from src.brain.analyst import analyze_strategy
+from src.brain.memory import fingerprint, is_redundant, record as memory_record, get_seen_set
 from src.strategy_engine.schema import validate_strategy
 from src.strategy_engine.evaluator import evaluate
 from src.backtesting.engine import backtest
@@ -95,19 +96,32 @@ async def run_round(
       Analyst:          Solo sobrevivientes (menos costo LLM).
     """
     past_results = load_leaderboard().tail(15).to_dict("records")
-    gen_result = await generate_strategies(llm, market_ctx, past_results, n)
-    if isinstance(gen_result, tuple):
-        strategies, new_ind_count = gen_result
-        if new_ind_count > 0:
-            logger.info("orchestrator: %d new indicators registered by LLM", new_ind_count)
-            await _maybe_notify("new_indicator", "LLM Auto-Discovery", f"{new_ind_count} nuevos indicadores", "LLM")
-    else:
-        strategies = gen_result
+    strategies, new_ind_count = await generate_strategies(llm, market_ctx, past_results, n)
+    if new_ind_count > 0:
+        logger.info("orchestrator: %d new indicators registered by LLM", new_ind_count)
+        await _maybe_notify("new_indicator", "LLM", f"{new_ind_count} nuevos indicadores", "LLM")
     if not strategies:
         logger.warning("orchestrator: no strategies generated")
         return []
 
-    logger.info("orchestrator: %d strategies — fast filter first", len(strategies))
+    # Dedup by fingerprint
+    seen_fps = get_seen_set()
+    unique_strategies = []
+    for s in strategies:
+        fp = fingerprint(s)
+        if is_redundant(fp, seen_fps):
+            logger.info("orchestrator: skipped duplicate '%s' (fp=%s)", s.get("name", "?"), fp)
+            continue
+        seen_fps.add(fp)
+        memory_record(fp, s)
+        unique_strategies.append(s)
+
+    if not unique_strategies:
+        logger.warning("orchestrator: all strategies are duplicates")
+        return []
+
+    strategies = unique_strategies
+    logger.info("orchestrator: %d unique strategies — fast filter first", len(strategies))
     results = []
 
     # Slice 30d for fast filter
@@ -148,8 +162,8 @@ async def run_round(
         sharpe = summary.get("sharpe", -999)
         n_t = summary.get("n_trades", 0)
 
-        # Survive if Sharpe > -0.1 and at least 3 trades
-        if sharpe > -0.1 and n_t >= 3:
+        # Survive if Sharpe > -0.05 and at least 3 trades
+        if sharpe > -0.05 and n_t >= 3:
             survivors.append((strategy_dict, sd))
             logger.info("  Fast pass: %s S=%.2f T=%d (%.1fs)", strat_name, sharpe, n_t, elapsed)
 
