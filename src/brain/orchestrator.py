@@ -75,6 +75,7 @@ async def run_round(
     timeframe: str = "15m",
     symbol: str = "btcusdt",
     best_from_previous: list[dict] | None = None,
+    round_feedback: str = "",
 ) -> list[dict]:
     """One round with train/test separation.
 
@@ -92,7 +93,7 @@ async def run_round(
         for b in best_from_previous:
             past_results.insert(0, b)
 
-    strategies, new_ind_count = await generate_strategies(llm, market_ctx, past_results, n)
+    strategies, new_ind_count = await generate_strategies(llm, market_ctx, past_results, n, round_feedback)
     if new_ind_count > 0:
         logger.info("orchestrator: %d new indicators registered by LLM", new_ind_count)
         await _maybe_notify("new_indicator", "LLM", f"{new_ind_count} nuevos indicadores", "LLM")
@@ -301,11 +302,22 @@ async def main():
             print(f"  {round_label}", flush=True)
             print(f"{'='*60}", flush=True)
 
+            # Build feedback from previous round
+            prev_new_indicators = sum(1 for r in all_results if r.get("run_id", "").startswith("🧪"))
+            prev_best = max(all_results, key=lambda r: r["sharpe"]) if all_results else {"sharpe": 0}
+            round_feedback = (
+                f"• Estrategias probadas: {len(all_results)}\n"
+                f"• Indicadores nuevos creados: {prev_new_indicators}\n"
+                f"• Mejor Sharpe: {prev_best['sharpe']:+.2f}\n"
+                f"• {'Crea al menos 1 indicador nuevo esta ronda.' if prev_new_indicators == 0 else 'Sigue creando indicadores nuevos.'}"
+            )
+
             results = await run_round(
                 llm, df_train, df_test, market_ctx,
                 n=args.n, days=args.days,
                 timeframe=args.resample, symbol=args.symbol,
                 best_from_previous=best_from_previous,
+                round_feedback=round_feedback,
             )
             all_results.extend(results)
 

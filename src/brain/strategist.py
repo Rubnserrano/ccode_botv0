@@ -46,6 +46,7 @@ async def generate_strategies(
     market_context: str,
     previous_results: list[dict],
     n: int = 3,
+    round_feedback: str = "",
 ) -> list[dict]:
     """Generate N strategies using the LLM.
 
@@ -56,6 +57,9 @@ async def generate_strategies(
     new_count : int
         Number of new indicators created.
     """
+    if not round_feedback:
+        round_feedback = "Primera ronda — no hay feedback previo. Crea indicadores nuevos."
+
     # Build previous results summary
     prev_summary = ""
     best_example = None
@@ -96,6 +100,7 @@ async def generate_strategies(
         n=n,
         indicator_list=indicator_list,
         total_count=total_count,
+        round_feedback=round_feedback,
     )
 
     response = await llm.generate(

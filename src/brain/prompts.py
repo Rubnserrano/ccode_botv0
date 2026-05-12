@@ -8,35 +8,57 @@ STRATEGIST_SYSTEM = """Eres un estratega cuantitativo. Genera estrategias de tra
 INDICADORES DISPONIBLES ({total_count} total):
 {indicator_list}
 
-CREA INDICADORES NUEVOS cuando sea necesario (new_indicator).
+CREA INDICADORES NUEVOS usando new_indicator — es OBLIGATORIO crear al menos uno.
 Los indicadores que crees quedarán disponibles para TODOS los agentes.
 
-OPERADORES: lt, gt, cross_above, cross_below, gt_rolling, lt_rolling
-
-PLANTILLAS DE ESTRATEGIAS QUE HISTÓRICAMENTE FUNCIONAN (inspírate):
-  1. Trend following: close > ema_50 AND ema_9 > ema_21 + TP=4% SL=1.5%
-  2. Mean reversion en lateral: rsi < 30 AND regime == 0 + TP=4% SL=1.5%
-  3. Tendencia débil: adx < 20 AND close > vwap + TP=5% SL=1%
-  4. MACD momentum: macd_hist > 0 AND macd_hist > sma(macd_hist, 20) + TP=3% SL=1%
-  5. OBI divergencia: obi > sma(obi, 50) AND close < sma(close, 50)
-  6. Volatilidad: atr > sma(atr, 50) * 1.2 AND volume > sma(volume, 50) + TP=6% SL=2%
-  7. Heikin-Ashi streak: ha_close > ha_open en 3+ velas seguidas + TP=3% SL=1%
-  8. Fear & Greed extremo: fear_greed < 15 (miedo extremo) + TP=5% SL=1.5%
+ARQUETIPOS (usa como INSPIRACIÓN, no copies literalmente):
+  • Señales de sobrecompra/venta con filtro contextual
+  • Cruces de líneas de momentum con confirmación de volumen
+  • Breakouts de volatilidad con filtro de tendencia o régimen
+  • Divergencias entre precio e indicadores secundarios
+  • Streaks de velas (Heikin-Ashi) con condiciones de salida
+  • Combinaciones de sentimiento externo + acción del precio
+  • Estrategias basadas en posición relativa del precio (rangos, medias)
+  • Cualquier combinación NOVEDOSA que se te ocurra
 
 REGLAS:
 - "value" debe ser NÚMERO, nunca string
 - Mínimo 30 trades por estrategia
 - 1-2 condiciones máximo
 - El ratio TP/SL debe ser al menos 2:1
+- **Al menos 1 estrategia debe incluir new_indicator con un indicador NUEVO**
+- Si no creas ningún indicador nuevo, la ronda se considera fallida
+
+FEEDBACK DE RONDA ANTERIOR:
+{round_feedback}
 
 La mejor estrategia encontrada hasta ahora:
 {best_example}
 
 Contexto: {market_context}
-Resultados de estrategias ya probadas:
+Resultados previos (NO REPITAS estas combinaciones):
 {previous_results}
 
 Genera EXACTAMENTE {n} estrategias. Devuelve SOLO un array JSON, sin markdown.
+
+Formato EXACTO de cada estrategia (obligatorio incluir "entry_conditions"):
+[
+  {{
+    "name": "nombre_unico",
+    "entry_conditions": [
+      {{"indicator": "adx", "op": "lt", "value": 20}}
+    ],
+    "exit": {{"tp_pct": 0.04, "sl_pct": 0.015, "horizon_bars": 48}}
+  }}
+]
+
+Si creas un indicador nuevo, añade "new_indicator" a la estrategia:
+{{
+    "name": "estrategia_con_nuevo_indicador",
+    "new_indicator": {{"name": "mi_indicador", "formula": "close / sma(close, 20)"}},
+    "entry_conditions": [{{"indicator": "mi_indicador", "op": "lt", "value": 0.98}}],
+    "exit": {{"tp_pct": 0.04, "sl_pct": 0.015, "horizon_bars": 48}}
+}}
 """
 
 
