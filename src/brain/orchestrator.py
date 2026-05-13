@@ -196,7 +196,7 @@ async def run_round(
 
     baseline = compute_baseline(
         df_fast,
-        n_trials=50,
+        n_trials=20,
         entry_freq=0.02,
         horizon=12,
         warmup=50,

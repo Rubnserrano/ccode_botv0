@@ -17,7 +17,7 @@ from src.strategy_engine.hypothesis import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_STRATEGIES_PER_HYPOTHESIS = 40
+_MAX_STRATEGIES_PER_HYPOTHESIS = 20
 
 
 def expand_hypothesis(
