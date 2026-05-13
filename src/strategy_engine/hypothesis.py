@@ -165,7 +165,7 @@ FAMILY_TEMPLATES: dict[HypothesisFamily, dict[str, Any]] = {
             {"indicator": "volume", "op": "gt_rolling", "rolling": "sma", "period": 20},
         ],
         "feature_requirements": [
-            {"name": "atr_compression_ratio", "formula": "atr / sma(atr, {compression_lookback})", "description": "ATR compression ratio (current vs historical)"},
+            {"name": "atr_compression_ratio", "formula": "atr_14 / sma(atr_14, {compression_lookback})", "description": "ATR compression ratio (current vs historical)"},
         ],
     },
 }

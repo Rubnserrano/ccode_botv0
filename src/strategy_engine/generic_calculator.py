@@ -96,6 +96,16 @@ def calc_formula(df: pd.DataFrame, formula: str, params: dict | None = None) -> 
     for name, func in _ALLOWED_FUNCS.items():
         namespace[name] = func
 
+    # Resolve indicator names from registry so formulas can use
+    # shorthand names like "atr", "rsi", "vwap", etc.
+    from src.strategy_engine.registry import INDICATOR_REGISTRY, calc_indicator
+    for ind_name, ind_fn in INDICATOR_REGISTRY.items():
+        if ind_name not in namespace:
+            try:
+                namespace[ind_name] = ind_fn(df, {})
+            except Exception:
+                pass
+
     # Safety checks
     _validate_formula(formula)
 
