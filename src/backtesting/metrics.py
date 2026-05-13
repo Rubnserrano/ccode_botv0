@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from statistics import mean, stdev
+from statistics import mean, stdev as _stdev
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,7 @@ def _bootstrap_pvalue(pnls: list[float], n_resamples: int = 1000) -> float:
 
 def compute_metrics(pnls: list[float], total_turnover: float) -> TradeMetrics:
     """Compute all trade metrics from a list of net PnL values."""
+    pnls = [float(p) for p in pnls]  # ensure pure Python floats (not numpy)
     n = len(pnls)
     if n == 0:
         return TradeMetrics(0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, False)
@@ -65,11 +66,21 @@ def compute_metrics(pnls: list[float], total_turnover: float) -> TradeMetrics:
     total_pnl = sum(pnls)
     avg = mean(pnls)
 
-    sd = stdev(pnls) if n > 1 else 0.0
+    sd = 0.0
+    if n > 1:
+        try:
+            sd = _stdev(pnls)
+        except Exception:
+            sd = 0.0
     sharpe = avg / sd if sd > 0 else 0.0
 
     downside = [p for p in pnls if p < 0]
-    downside_sd = stdev(downside) if len(downside) > 1 else 0.0
+    downside_sd = 0.0
+    if len(downside) > 1:
+        try:
+            downside_sd = _stdev(downside)
+        except Exception:
+            downside_sd = 0.0
     sortino = avg / downside_sd if downside_sd > 0 else float("inf") if avg > 0 else 0.0
 
     max_dd = _max_drawdown(pnls)

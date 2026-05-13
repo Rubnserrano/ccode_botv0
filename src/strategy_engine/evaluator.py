@@ -40,7 +40,7 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
         if key not in _cache:
             try:
                 _cache[key] = calc_indicator(name, df, params)
-            except ValueError:
+            except (ValueError, KeyError):
                 # Indicator not found — try auto-discovery from external sources
                 if name not in _auto_discovery_cache:
                     _auto_discovery_cache.add(name)
@@ -63,22 +63,29 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
 
         op = cond.op
         cmp_val = cond.value
-        # Safely coerce value to numeric
-        if not isinstance(cmp_val, (int, float)):
+
+        # Auto-resolve: if cmp_val is a string that names another column/indicator,
+        # compare the two indicators instead of using a fixed value.
+        # This allows natural expressions like {"indicator": "close", "op": "gt", "value": "vwap"}
+        if isinstance(cmp_val, str) and cmp_val != "":
             try:
-                cmp_val = float(cmp_val)
-            except (ValueError, TypeError):
+                cmp_series = _cached_indicator(cmp_val, {})
+                if not cmp_series.empty:
+                    other_val = cmp_series.iloc[i]
+                    if not pd.isna(other_val):
+                        cmp_val = float(other_val)
+            except Exception:
+                pass
+
+        # Rolling, cross, and streak operators don't need cmp_val — handle them first
+        if op in ("gt_rolling", "lt_rolling"):
+            roll = calc_rolling(series, cond.rolling, cond.period)
+            roll_val = roll.iloc[i]
+            if pd.isna(roll_val):
                 return False
+            return value > roll_val if op == "gt_rolling" else value < roll_val
 
-        if op in ("lt", "gt", "lte", "gte", "eq", "ne"):
-            if op == "lt":   return value < cmp_val
-            if op == "gt":   return value > cmp_val
-            if op == "lte":  return value <= cmp_val
-            if op == "gte":  return value >= cmp_val
-            if op == "eq":   return value == cmp_val
-            if op == "ne":   return value != cmp_val
-
-        elif op in ("cross_above", "cross_below"):
+        if op in ("cross_above", "cross_below"):
             if i == 0:
                 return False
             prev = series.iloc[i - 1]
@@ -89,14 +96,7 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
             else:
                 return prev >= cmp_val and value < cmp_val
 
-        elif op in ("gt_rolling", "lt_rolling"):
-            roll = calc_rolling(series, cond.rolling, cond.period)
-            roll_val = roll.iloc[i]
-            if pd.isna(roll_val):
-                return False
-            return value > roll_val if op == "gt_rolling" else value < roll_val
-
-        elif op in ("streak_gte", "streak_lte"):
+        if op in ("streak_gte", "streak_lte"):
             count = 0
             direction = 1 if op == "streak_gte" else -1
             for j in range(i, max(-1, i - (cond.period or 5)), -1):
@@ -106,6 +106,25 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
                 else:
                     break
             return count >= (cond.value or 3)
+
+        # For all other ops: safely coerce value to numeric
+        if not isinstance(cmp_val, (int, float)):
+            try:
+                cmp_val = float(cmp_val)
+            except (ValueError, TypeError):
+                return False
+
+        if op in ("lt", "gt", "lte", "gte", "eq", "ne", "in"):
+            if op == "lt":   return value < cmp_val
+            if op == "gt":   return value > cmp_val
+            if op == "lte":  return value <= cmp_val
+            if op == "gte":  return value >= cmp_val
+            if op == "eq":   return value == cmp_val
+            if op == "ne":   return value != cmp_val
+            if op == "in":
+                if isinstance(cmp_val, (list, tuple)):
+                    return value in cmp_val
+                return False
 
         return False
 

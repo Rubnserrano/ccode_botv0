@@ -224,6 +224,13 @@ def catalog() -> pd.DataFrame:
                     min_ts = max_ts = ""
                     cols = []
 
+                # Last modified time from newest parquet file
+                try:
+                    last_mod = max(p.stat().st_mtime for p in parquets)
+                    last_updated = datetime.fromtimestamp(last_mod, tz=timezone.utc).isoformat()
+                except Exception:
+                    last_updated = ""
+
                 rows.append({
                     "asset_id": asset_id,
                     "source_type": source_type,
@@ -232,6 +239,7 @@ def catalog() -> pd.DataFrame:
                     "max_ts": max_ts,
                     "rows": total_rows,
                     "columns": cols,
+                    "last_updated": last_updated,
                 })
 
     return pd.DataFrame(rows)

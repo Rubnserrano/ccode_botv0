@@ -15,9 +15,12 @@ EXTENDING FOR AGENTS:
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from src.indicators.calculator import (
     calc_rsi, calc_macd, calc_ema, calc_vwap,
@@ -75,11 +78,21 @@ def _ha_open(df: pd.DataFrame) -> pd.Series:
 def calc_indicator(name: str, df: pd.DataFrame, params: dict | None = None) -> pd.Series:
     """Compute a single indicator on-the-fly.
 
-    Uses function caching to avoid recomputing the same indicator
-    with the same params within a single evaluation session.
+    Supports auto-resolution:
+      - ``ema_20`` → ``ema`` with ``period=20``
+      - ``rsi_14`` → ``rsi`` with ``period=14``
     """
     p = params or {}
     fn = INDICATOR_REGISTRY.get(name)
+
+    # Auto-resolve pattern: indicator_period (e.g. ema_20, rsi_14)
+    if fn is None and "_" in name:
+        base, period_str = name.rsplit("_", 1)
+        fn = INDICATOR_REGISTRY.get(base)
+        if fn is not None and period_str.isdigit():
+            p = {**p, "period": int(period_str)}
+            logger.info("registry: auto-resolved '%s' → '%s' with period=%s", name, base, period_str)
+
     if fn is None:
         raise ValueError(f"Unknown indicator: '{name}'. Available: {list(INDICATOR_REGISTRY)}")
     return fn(df, p)

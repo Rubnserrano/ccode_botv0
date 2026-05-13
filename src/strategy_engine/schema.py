@@ -11,7 +11,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-VALID_OPS = {"lt", "gt", "lte", "gte", "eq", "ne",
+VALID_OPS = {"lt", "gt", "lte", "gte", "eq", "ne", "in",
              "cross_above", "cross_below",
              "gt_rolling", "lt_rolling",
              "streak_gte", "streak_lte"}

@@ -17,7 +17,8 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-from src.store import write, read, available_range, row_count
+from src.ts_store import write as ts_write
+from src.store import read, available_range, row_count  # legacy — only for metadata
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +28,17 @@ EXCHANGE = "binance"
 
 
 def _print_info():
-    base = Path("data/raw")
-    if not base.exists():
-        print("DataStore is empty")
+    from src.ts_catalog import get_catalog
+    cat = get_catalog(force_refresh=True)
+    if cat.empty:
+        print("TS Store is empty")
         return
     found = False
-    for exchange_dir in sorted(base.iterdir()):
-        for symbol_dir in sorted(exchange_dir.iterdir()):
-            if symbol_dir.name == ".gitkeep":
-                continue
-            exchange = exchange_dir.name
-            symbol = symbol_dir.name
-            n = row_count(exchange, symbol)
-            start, end = available_range(exchange, symbol)
-            if start:
-                print(f"  {exchange}/{symbol:12s}  {n:>8,} rows  {start.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}")
-                found = True
+    for _, r in cat.iterrows():
+        print(f"  {r['asset_id']:30s}  {r['frequency']:10s}  {int(r['rows']):>8,} rows  {str(r.get('min_ts',''))[:10]} → {str(r.get('max_ts',''))[:10]}")
+        found = True
     if not found:
-        print("DataStore is empty")
+        print("TS Store is empty")
 
 
 _INTERVAL_MAP = {
@@ -143,8 +137,9 @@ async def download_symbol(
         return pd.DataFrame()
 
     df = _ohlcv_to_dataframe(all_klines, interval)
-    n = write(EXCHANGE, symbol, df)
-    logger.info(f"{symbol}: saved {n} rows to DataStore")
+    asset_id = f"market:{EXCHANGE}:{symbol.lower()}"
+    n = ts_write(asset_id, df, frequency="raw")
+    logger.info(f"{symbol}: saved {n} rows to TS Store (%s)", asset_id)
     return df
 
 

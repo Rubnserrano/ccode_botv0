@@ -1,5 +1,8 @@
 """Parquet-backed time-series storage, partitioned by month.
 
+⚠️ DEPRECATED — use src.ts_store instead. Kept for backward compatibility
+during migration. Will be removed in Phase 31.
+
 Layout:  data/raw/{exchange}/{symbol}/{YYYY-MM}.parquet
 Schema: ts (datetime64[ns, UTC]), open, high, low, close, volume (float64)
 """

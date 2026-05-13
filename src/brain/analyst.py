@@ -21,8 +21,31 @@ async def analyze_strategy(
     market_context: str,
     days: int = 365,
     timeframe: str = "15m",
+    wf_sharpe: float = 0.0,
+    wf_sharpe_std: float = 0.0,
+    wf_cv: float = 999.0,
+    oos_sharpe: float = 0.0,
+    oos_trades: int = 0,
 ) -> dict:
     """Analyze a backtest result and return structured insights.
+
+    Parameters
+    ----------
+    llm : LLMClient
+    strategy_json : dict
+        The strategy definition.
+    summary : dict
+        Backtest summary (train metrics).
+    market_context : str
+        Current market conditions.
+    days, timeframe : str
+        Data config.
+    wf_sharpe, wf_sharpe_std, wf_cv : float
+        Walk-forward metrics.
+    oos_sharpe : float
+        Hold-out OOS Sharpe.
+    oos_trades : int
+        Number of OOS trades.
 
     Returns
     -------
@@ -40,6 +63,11 @@ async def analyze_strategy(
         max_dd=summary.get("max_dd", 0),
         passes_gates=summary.get("passes_gates", False),
         market_context=market_context,
+        wf_sharpe=wf_sharpe,
+        wf_sharpe_std=wf_sharpe_std,
+        wf_cv=wf_cv,
+        oos_sharpe=oos_sharpe,
+        oos_trades=oos_trades,
     )
     user_prompt = "Analiza esta estrategia y sus resultados."
 
@@ -47,7 +75,7 @@ async def analyze_strategy(
         system_prompt=system,
         user_prompt=user_prompt,
         response_format="json_object",
-        temperature=0.3,  # lower temp for analysis
+        temperature=0.3,
     )
 
     raw = response["content"]
@@ -60,5 +88,6 @@ async def analyze_strategy(
     else:
         analysis = raw
 
-    logger.info("brain: analyst done — confidence=%.2f", analysis.get("confidence", 0))
+    logger.info("brain: analyst done — confidence=%.2f  wf_cv=%.2f  oos=%.2f",
+                analysis.get("confidence", 0), wf_cv, oos_sharpe)
     return analysis

@@ -1,202 +1,321 @@
-# ccode_botv0 — BTC Data Ingestion Engine
+# ccode-botv0 — Autonomous Trading Research System (ATRS)
 
 Paper trading only. Never touch real funds.
 
-## Core Identity
-BTC data ingestion engine: download historical OHLCV from Binance, store in Parquet + TimescaleDB, stream real-time via WebSocket.
+## 1. Core Identity
 
-## Safety Rules (MANDATORY — never skip)
+Sistema de investigación de trading algorítmico con paper trading, backtesting, y agente cognitivo auto-mejorable. Orientado a rentabilidad mediante exploración sistemática de estrategias.
+
+## 2. Safety Rules (MANDATORY — never skip)
+
 1. **Paper only** — never reference real funds
 2. **Propose before commit** — never commit/push without human approval
 3. **Check git status before any change** — if dirty working tree, stop and report
 4. **Run tests after every change** — never leave code untested
-5. **Never delete data files** - `data/raw/*` are precious
+5. **Never delete data files** — `data/raw/*`, `data/ts/*`, `data/features/*` are precious
 6. **Always use `.venv/bin/python3`** — not system python
 7. **Always `await asyncio.sleep()`** — never `time.sleep()`
 8. **Max 3 retries on failure** — log and escalate after 3
 
-## Workflow: Protección contra crash de terminal
+## 3. Architecture Overview
 
-1. **ANTES de empezar cualquier tarea o fase:**
-   - Crear rama desde `main`
-   - Crear PR en GitHub describiendo QUÉ se va a hacer y POR QUÉ
-   - Push rama inmediatamente
+### 3.1 General Vision
 
-2. **DURANTE la tarea:**
-   - Commits periódicos (cada archivo o feature pequeño)
-   - Push frecuente a la rama (al menos cada 2-3 cambios)
-
-3. **SI el usuario dice "se me cerró la terminal" (RECUPERACIÓN):**
-   - Lo PRIMERO: `git status`, `git log --oneline -5`, `git branch`
-   - Verificar último commit y cambios sin commit
-   - Reportar estado al usuario y preguntar por dónde seguir
-
-## Project Structure
 ```
-ccode_botv0/
-├── docker-compose.yml          # TimescaleDB (2-pg16, puerto 5432)
-├── requirements.txt            # httpx, websockets, pandas, pyarrow, asyncpg
-├── data/
-│   └── raw/binance/btcusdt/
-│       ├── 2024-01.parquet     # ← particiones mensuales
-│       └── ...
-├── src/
-│   ├── store.py                # DataStore Parquet (write/read/available_range)
-│   ├── download.py             # Descarga histórica REST (incremental)
-│   ├── resample.py             # Remuestreo 1m → 5m/15m/1h/1d
-│   ├── feed.py                 # WebSocket: PriceBuffer, TradeBuffer, CandleBuffer
-│   ├── tsdb.py                 # TimescaleDB: asyncpg, hypertable, continuous aggregates
-│   └── main.py                 # Orquestador: download + sync + WS + persist
-```
-
-## Architecture
-```
-Binance REST ──→ download.py ──→ Parquet (store.py) ──→ Backtesting
-                └─→ tsdb.sync_from_parquet() ──→ TimescaleDB (hypertable)
-
-Binance WS ──→ feed.py (CandleBuffer) ──→ on_close callback
-                                         ├─→ store.write() ──→ Parquet
-                                         └─→ tsdb.insert_candle() ──→ TimescaleDB
+                     ┌──────────────────────────────┐
+                     │     Message Bus / Cola        │
+                     │  (asyncio.Queue → Redis)      │
+                     └──────┬──────────────┬─────────┘
+                            │              │
+            ┌───────────────┘              └───────────────┐
+            ▼                                              ▼
+   ┌──────────────────┐                          ┌──────────────────┐
+   │  Data Agent       │                          │  Research Pool    │
+   │  (ingest, fuentes)│                          │  (N workers)      │
+   │                   │                          │                   │
+   │  Binance REST/WS  │                          │  Worker 1 (LLM)   │
+   │  MCP sources      │                          │  Worker 2 (LLM)   │
+   │  RSS/Twitter    │                          │  Worker 3 (gen.) │
+   │  Scheduler      │                          │  Coordinator      │
+   └────────┬─────────┘                          └────────┬──────────┘
+            │                                              │
+            ▼                                              ▼
+   ┌──────────────────┐                          ┌──────────────────┐
+   │  TS Store         │                          │  Leaderboard     │
+   │  (data central)   │                          │  + Memory        │
+   └────────┬─────────┘                          └────────┬──────────┘
+            │                                              │
+            ▼                                              ▼
+   ┌──────────────────┐                          ┌──────────────────┐
+   │  Monitor Agent    │                          │  Paper Agent      │
+   │  (métricas,       │                          │  (ejecución)      │
+   │   alertas)        │                          │                   │
+   └──────────────────┘                          └──────────────────┘
+                            ▲
+                            │
+                      ┌─────┴──────┐
+                      │  API Layer  │
+                      │  (FastAPI)  │
+                      └────────────┘
 ```
 
-## TimescaleDB Schema
-```sql
-hypertable: ohlcv (ts, symbol, open, high, low, close, volume)
-  Chunk: 1 month, Unique: (ts, symbol)
-  Continuous aggregates: ohlcv_5m, ohlcv_1h
+### 3.2 POC Scope
+
+La POC simplifica la visión general a un sistema monoproceso con componentes paralelizables:
+
+```
+main.py ─── lanza en paralelo (asyncio.gather):
+  ├── data_agent:    WS + ingestion → TS Store
+  ├── research_pool: N workers → leaderboard + memoria
+  ├── paper_runner:  estrategias activas → equity
+  └── API:           FastAPI para agentes
+
+Comunicación: archivos compartidos (TS Store, leaderboard JSONL, memoria SQLite)
+No hay cola de mensajes aún — los workers son independientes.
 ```
 
-## Quick Start
+La POC termina cuando el sistema es capaz de:
+- Generar estrategias de forma autónoma (vía LLM)
+- Validarlas con train/test split + walk-forward + OOS
+- Ejecutarlas en paper trading
+- Demostrar (o refutar) su rentabilidad
+- Un agente LLM puede entender el estado completo en 1-2 llamadas API
+
+## 4. Project Structure
+
+```
+src/
+├── __init__.py
+├── download.py           # Binance REST historical download (legacy)
+├── feed.py               # WebSocket: PriceBuffer, TradeBuffer, CandleBuffer
+├── main.py               # Orchestrator: data ingestion + paper + agents
+├── query.py              # Unified multi-asset query engine
+├── resample.py           # OHLCV resampling 1m → 5m/15m/1h/1d
+├── store.py              # Raw Parquet DataStore (legacy — usar ts_store.py)
+├── ts_aligner.py         # Universal time-series aligner
+├── ts_catalog.py         # Asset catalog with metadata
+├── ts_store.py           # Universal TS Store (Parquet partitions by source_type/asset/freq)
+├── tsdb.py               # TimescaleDB async client (legacy)
+│
+├── backtesting/          # Backtesting engine
+│   ├── engine.py         # Vectorized backtest with TP/SL
+│   ├── cli.py            # CLI with --parallel, --tp, --sl
+│   ├── costs.py          # Trade cost model
+│   ├── metrics.py        # Sharpe, Sortino, MaxDD, p-value
+│   ├── strategy.py       # Strategy dataclass
+│   ├── strategies.py     # 5 built-in strategies
+│   ├── walk_forward.py   # Walk-forward analysis
+│   ├── evolution.py      # Genetic algorithm optimizer
+│   └── genealogy.py      # Strategy lineage tracking
+│
+├── brain/                # LLM Cognitive Layer
+│   ├── strategist.py     # Generates strategies via OpenRouter
+│   ├── analyst.py        # Evaluates backtest results
+│   ├── orchestrator.py   # Full research loop (train/test + OOS)
+│   ├── mcp_agent.py      # Tool-calling agent (no MCP protocol)
+│   ├── memory.py         # Fingerprint deduplication
+│   ├── llm_client.py     # OpenRouter wrapper with fallback chain
+│   └── prompts.py        # Strategist + Analyst system prompts
+│
+├── features/             # Feature Store
+│   ├── builder.py        # CLI: rebuild features from raw data
+│   └── store.py          # Parquet read/write for features
+│
+├── indicators/           # Technical indicators
+│   └── calculator.py     # calc_all(): RSI, MACD, EMA, VWAP, OBI, HA, ATR, ADX, regime
+│
+├── intelligence/         # External data sources
+│   ├── models.py         # DataSource dataclass
+│   ├── registry.py       # CRUD for source definitions
+│   ├── fetcher.py        # HTTP fetch + parse (JSON/CSV)
+│   ├── aligner.py        # Align to standard timeframes
+│   └── orchestrator.py   # Background scheduler
+│
+├── mcp_servers/          # MCP servers (unused — see TECH_DEBT.md)
+│   ├── query_server.py
+│   ├── backtest_server.py
+│   └── memory_server.py
+│
+├── notification/         # Telegram notifications
+│   └── telegram.py
+│
+├── paper/                # Paper trading
+│   ├── account.py        # PaperAccount (open/close/equity)
+│   ├── runner.py         # PaperRunner (CandleBuffer → signals)
+│   └── state.py          # State persistence
+│
+├── research/             # Research loop (legacy — usar brain/)
+│   ├── leaderboard.py    # Leaderboard persistence (JSONL + Parquet)
+│   └── loop.py           # Genetic algorithm loop (pre-LLM)
+│
+└── strategy_engine/      # JSON-defined strategies
+    ├── schema.py         # StrategyDef, Condition, ExitRules
+    ├── evaluator.py      # Evaluate strategies against DataFrame
+    ├── registry.py       # INDICATOR_REGISTRY + ROLLING_REGISTRY
+    ├── generic_calculator.py  # Runtime formula evaluator
+    └── store.py          # Save/load strategy JSON files
+
+api/
+└── app.py                # FastAPI: agent interaction endpoints
+
+dashboard/
+└── app.py                # Streamlit dashboard (paper trading view)
+
+data/
+├── ts/                   # Universal TS Store (market, sentiment, onchain, derivatives,...)
+│   ├── catalog.parquet   # Asset catalog
+│   └── {source_type}/{asset_id}/{frequency}/{YYYY-MM}.parquet
+├── raw/                  # Legacy raw storage (being migrated)
+├── features/             # Precomputed indicators
+├── external/             # Raw external data source fetches
+├── external_aligned/     # Time-aligned external data
+├── sources/              # Data source definitions (JSON)
+├── strategies/           # Saved strategy definitions (JSON)
+├── parquet/              # Research artifacts (leaderboard, genealogy, audit)
+└── paper_state.json      # Paper trading state
+
+tests/
+├── test_store.py         # DataStore tests (11 tests)
+├── test_feed.py          # WebSocket/buffer tests (20 tests)
+└── conftest.py
+```
+
+## 5. Completed Phases
+
+| Phase | What | Notes |
+|---|---|---|
+| 0 | Project scaffold | git init, deps, directories |
+| 1 | DataStore | Parquet monthly partitions |
+| 2 | Binance downloader | REST, incremental |
+| 3 | OHLCV resampler | 1m → 5m/15m/1h/1d |
+| 4 | WebSocket feeds | ticker, trades, candles |
+| 5 | Main orchestrator | download + WS + snapshot |
+| 6 | TimescaleDB | asyncpg, hypertable, continuous aggregates |
+| 7 | Hardening | heartbeat, backoff, tests (31) |
+| 8 | Dockerize | Dockerfile + compose |
+| 9 | Indicators calculator | RSI, MACD, EMA, VWAP, OBI, HA, ATR, ADX, regime |
+| 10 | Backtesting engine | costs, metrics, 5 strategies, CLI, walk-forward, evolution, genealogy |
+| 11 | Strategy DSL | Strategy dataclass, walk-forward, evolution, genealogy |
+| 12 | Paper trading | PaperAccount, runner, Streamlit dashboard |
+| 13 | Feature Store | Precomputed indicators, builder CLI |
+| 14 | Parallel backtests | --parallel, --tp, --sl flags |
+| 15 | Strategy Engine | JSON-defined strategies via evaluator |
+| 16 | Research loop | Genetic algorithm + leaderboard |
+| 17 | LLM Brain | Strategist + Analyst via OpenRouter |
+| 18 | Agent API | FastAPI endpoints |
+| 19 | External data sources | VIX, Fear & Greed, custom sources |
+| 20 | Overnight research | Automated night loop + Telegram |
+| 21 | Overnight fixes | Rate limit, backoff, signaling |
+| 22 | Train/test split | OOS validation, strategy templates |
+| 23 | Universal TS Store + MCP Servers | Unified time-series storage, MCP servers |
+
+### Known Inefficiencies (detected post-Phase 23)
+
+| Inefficiency | Location | Impact | Planned Fix |
+|---|---|---|---|
+| **Dual stores** | `store.py` (old) vs `ts_store.py` (new) | Data scattered across `data/raw/` and `data/ts/`. `main.py` uses old, `query.py` uses new | Phase 26: Unified Store |
+| **Competing research loops** | `src/research/loop.py` (genetic) vs `src/brain/orchestrator.py` (LLM) | Both write to same leaderboard with different quality levels | Phase 26: deprecate genetic loop |
+| **MCP servers unused** | `src/mcp_servers/*.py` | 5KB dead code. `mcp_agent.py` reimplements tools inline | Phase 31: remove or rewire |
+| **Test gap** | Only 2/50+ modules tested | 31 tests cover only `store.py` and `feed.py` | Phase 25: Test Foundation |
+| **Dual data trees** | `data/raw/` (old) + `data/ts/` (new) + `data/features/` (orphan) | Fragmented storage, hard to discover | Phase 26: migrate to TS Store |
+| **API key in shell script** | `research_loop.sh` line 17 | Hardcoded key (security risk) | Phase 25: move to `.env` |
+
+## 6. Cognitive Architecture
+
+### Current (Phase 23)
+
+```
+Strategist (deepseek-chat)
+  │  "genera N estrategias JSON"
+  ▼
+Fast filter (30d de train data)
+  │
+  ▼
+Full backtest + walk-forward (train)
+  │
+  ▼
+OOS validation (hold-out test)
+  │
+  ▼
+Analyst (deepseek-chat)
+  │  "evalúa resultados"
+  ▼
+Leaderboard + Telegram
+```
+
+Limitaciones actuales:
+- **Memoria**: solo fingerprint dedup (coincidencia exacta de strings). No hay memoria episódica ni semántica.
+- **Razonamiento**: single-step LLM call. No hay chain-of-thought ni reflexión.
+- **Especialización**: un mismo modelo (deepseek-chat) para todo, diferenciado solo por prompt.
+- **Aprendizaje cross-session**: cada ejecución empieza desde cero (excepto el leaderboard JSONL).
+
+### Target (post-Phase 31)
+
+```
+1. Strategist genera hipótesis + reasoning explícito
+2. Backtest rápido (fast filter 30d)
+3. Si pasa → full backtest + walk-forward + OOS
+4. Analyst evalúa + extrae lecciones → memoria semántica
+5. Reflexión: compara hipótesis vs resultado real
+6. Refinamiento: strategist recibe feedback, itera (max 3)
+7. Meta-evaluación: "¿Estas estrategias son genuinamente diferentes?"
+8. Las lecciones se consolidan en memoria episódica + semántica
+9. El strategist consulta memoria antes de generar nuevas ideas
+```
+
+Ver [BACKLOG.md](./BACKLOG.md) para el roadmap completo.
+
+## 7. How to Run (POC-focused)
+
+### Start data ingestion + paper trading
+
 ```bash
-# 1. Start TimescaleDB
-docker compose up -d
-
-# 2. Run orchestrator (downloads history if empty, syncs to TSDB, starts WS)
-TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode" .venv/bin/python3 -m src.main
-
-# 3. Download history manually (optional)
-.venv/bin/python3 -m src.download --symbol BTCUSDT --days 862
-
-# 4. Check TimescaleDB
-.venv/bin/python3 -c "import asyncio; from src.tsdb import TimescaleDB; ..."
+docker compose up -d                                          # TimescaleDB
+TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode"  \
+  .venv/bin/python3 -m src.main                               # Ingest + paper
 ```
 
-## Completed Phases
-- Phase 0: Project scaffold (git init, deps, directories)
-- Phase 1: DataStore (Parquet monthly partitions)
-- Phase 2: Binance historical downloader (REST, incremental)
-- Phase 3: OHLCV resampler (1m → 5m/15m/1h/1d)
-- Phase 4: WebSocket feeds (ticker, trades, candles)
-- Phase 5: Main orchestrator (download + WS + snapshot)
-- Phase 6: TimescaleDB integration (asyncpg, hypertable, continuous aggregates, dual persistence)
-- Phase 7: WebSocket hardening (heartbeat, backoff), async download, unit tests (31)
-- Phase 8: Dockerize app (Dockerfile + compose with TSDB + app services)
-- Phase 9: OHLCV indicator calculator (RSI, MACD, EMA, VWAP, OBI, Heikin-Ashi, ATR, ADX, regime detection)
-- Phase 10: Backtesting engine (costs, metrics, 5 strategies, CLI, walk-forward, evolution, genealogy)
-- Phase 11: Strategy DSL prep (Strategy dataclass), walk-forward, evolution engine, genealogy
-- Phase 12: Paper trading (PaperAccount, runner, decoupled Streamlit dashboard)
-- Phase 13: Feature Store (precomputed indicators in Parquet, builder CLI, real-time updates)
-- Phase 14: Parallel backtests CLI (--parallel flag, --tp, --sl flags)
-- Phase 15: Strategy Engine — JSON-defined strategies via evaluator
-- Phase 16: Automated research loop with progressive leaderboard
-- Phase 17: LLM Brain — Strategist + Analyst via OpenRouter (deepseek-chat)
-
-## How to Add a New Indicator (Feature)
-
-Example: adding ATR (Average True Range) as indicator #14.
-
-### Step 1: Add the function to `src/indicators/calculator.py`
-
-```python
-def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Average True Range — volatility indicator."""
-    prev_close = df["close"].shift(1)
-    tr = pd.concat([
-        (df["high"] - df["low"]).abs(),
-        (df["high"] - prev_close).abs(),
-        (df["low"] - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(window=period, min_periods=period).mean()
-```
-
-Rules:
-- Pure function: no I/O, no side effects, no global state
-- Input: pd.Series or pd.DataFrame (OHLCV)
-- Output: pd.Series or pd.DataFrame
-- Return NaN for periods before the indicator has enough data
-- All values must be float64 (pyarrow will infer this automatically)
-
-### Step 2: Register it in `calc_all()`
-
-```python
-def calc_all(df: pd.DataFrame) -> pd.DataFrame:
-    ...
-    result["atr_14"] = calc_atr(result, 14)
-    return result
-```
-
-### Step 3: Rebuild the Feature Store
+### Run research (LLM brain)
 
 ```bash
-# Build Docker image with the new code
-docker compose build app
-docker compose up -d app
+.venv/bin/python3 -m src.brain.orchestrator \
+  --rounds 2 --n-strategies 5 --days 365 --resample 15m
+```
 
-# Rebuild ALL features with the new indicator
+Resultados en `data/parquet/research/leaderboard.parquet` y Telegram si está configurado.
+
+### Run MCP agent (tool-calling)
+
+```bash
+.venv/bin/python3 -m src.brain.mcp_agent --days 180 --frequency 15m
+```
+
+Modo interactivo: escribe queries en lenguaje natural y el agente usa tools para responder.
+
+### Start API for agents
+
+```bash
+.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000
+```
+
+### Run specific backtest
+
+```bash
+.venv/bin/python3 -m src.backtesting.cli \
+  --strategy ema_trend --resample 15m --walk-forward --parallel
+```
+
+### Rebuild feature store (after adding indicators)
+
+```bash
 docker compose exec app python -m src.features.builder --symbol BTCUSDT --rebuild
 ```
 
-- ``--rebuild`` forces full recalculation of all months.
-- Without ``--rebuild``, only months after the latest feature are built (incremental).
-- The builder reads raw Parquet, runs calc_all(), and writes to data/features/.
-- Build time for 1.24M rows: ~40 seconds.
-
-### Step 4: Verify
-
-```bash
-docker compose exec app python -c "
-import pyarrow.parquet as pq
-pf = pq.read_table('data/features/btcusdt/2026-05.parquet')
-print('Columns:', pf.column_names)  # should include atr_14
-print('Latest ATR:', pf.column('atr_14')[-1])
-"
-```
-
-### What happens automatically after this
-
-| Componente | Se actualiza solo? |
-|-----------|-------------------|
-| **Histórico** (Feature Store) | ✅ Sí — tras rebuild |
-| **Real-time** (main.py) | ✅ Sí — calc_all() ya lo incluye |
-| **Backtesting CLI** | ✅ Sí — lee de features directamente |
-| **Paper trading** | ✅ Sí — usa calc_all() en on_candle_close |
-| **Dashboard** | ❌ No — dashboard no toca features |
-| **TimescaleDB** | ❌ No — TSDB solo guarda OHLCV, no indicadores |
-| **Estrategias existentes** | ❌ No — no usan atr_14 hasta que las edites |
-
-### To use the new indicator in a strategy
-
-```python
-def my_new_strategy(df: pd.DataFrame) -> pd.Series:
-    sig = pd.Series(0, index=df.index)
-    sig[df["atr_14"] > df["atr_14"].rolling(100).mean()] = 1  # high vol → BUY
-    return sig
-```
-
-## Agent Integration — API Layer
+## 8. Agent Integration — API Layer
 
 The system exposes a FastAPI for agents to interact with programmatically.
 
-### Starting the API
-
-```bash
-# Inside Docker:
-docker compose exec app python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
-
-# Or add to docker-compose.yml as a service
-```
-
-### Agent Endpoints
+### Available Endpoints
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -207,35 +326,33 @@ docker compose exec app python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
 | `GET` | `/leaderboard?top=10&min_sharpe=0` | Research results |
 | `GET` | `/strategies` | Saved strategies |
 | `GET` | `/system` | System state (data volumes, paper trading) |
+| `POST` | `/data-sources` | Register external data source |
+| `GET` | `/data-sources` | List registered sources |
+| `GET` | `/data-sources/{name}` | Get source details |
+| `DELETE` | `/data-sources/{name}` | Delete source + data |
+| `POST` | `/data-sources/{name}/fetch` | Force immediate fetch |
 
-### Registering a New Indicator (without coding)
+**Próximamente**: `POST /research/run` — lanzar research loop via API.
 
-Any agent can create new indicators at runtime using formulas:
+### Agent Workflow (recommended)
 
-```bash
-curl -X POST http://localhost:8000/indicators \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "momentum_12",
-    "formula": "close - close.shift(12)",
-    "description": "12-period momentum"
-  }'
+```
+1. GET /system       → understand current state (data, indicators, paper)
+2. POST /indicators/test → test a new indicator formula
+3. POST /indicators  → register the indicator
+4. GET /leaderboard  → see existing results
+5. GET /strategies   → inspect successful strategies
 ```
 
-After registration, the indicator is immediately available in any strategy JSON:
+## 9. Formula Language & Indicators
 
-```json
-{"indicator": "momentum_12", "op": "gt", "value": 0}
-```
-
-### Formula Language
-
-Formulas use Python syntax with access to:
+Formulas use Python syntax with access to available columns and helper functions.
 
 **Available columns** (use by name directly):
 `close`, `high`, `low`, `open`, `volume`, `rsi_14`, `macd`, `macd_signal`, `macd_hist`, `ema_9`, `ema_21`, `ema_50`, `vwap`, `obi`, `atr_14`, `adx_14`, `regime`, `ha_open`, `ha_high`, `ha_low`, `ha_close`
 
-**Available functions** (call by name):
+**Available functions**:
+
 | Function | Purpose | Example |
 |----------|---------|---------|
 | `sma(series, period)` | Simple Moving Average | `sma(close, 20)` |
@@ -249,40 +366,28 @@ Formulas use Python syntax with access to:
 
 **Math**: `abs(x)`, `max(a,b)`, `min(a,b)`, `sum(list)`, `round(x)`, `sqrt(x)`, `log(x)`, `log10(x)`
 
-**Parameters**: `{param_name}` is replaced at registration time.
+### ⛔ Restricted
 
-**Also valid**: pandas method syntax on columns — `close.shift(12)` is the same as `shift(close, 12)`.
-
-### ⛔ RESTRICTIONS — What agents CANNOT do
-
-These are blocked for security:
-- ❌ **No `import` statements** — `"__import__('os')"` will fail
-- ❌ **No file I/O** — `"open('/etc/passwd')"` will fail
-- ❌ **No `exec` / `eval`** — nested eval is not allowed
-- ❌ **No network calls** — only math and data operations
-- ❌ **No variable assignment** — `x = close + 1` will fail (use expressions directly)
+- ❌ No `import` statements
+- ❌ No file I/O
+- ❌ No `exec` / `eval`
+- ❌ No network calls
+- ❌ No variable assignment
 
 Formulas are **mathematical expressions only**. They operate on existing columns.
-They cannot create loops, write files, or access the internet.
 
-### Examples
+### Registering a New Indicator
 
-```python
-# Simple momentum
-"close - close.shift(12)"
+```bash
+curl -X POST http://localhost:8000/indicators \
+  -H "Content-Type: application/json" \
+  -d '{"name": "momentum_12", "formula": "close - close.shift(12)", "description": "12-period momentum"}'
+```
 
-# Bollinger-like: close vs SMA
-"(close - sma(close, 20)) / std(close, 20)"
+After registration, the indicator is immediately available in any strategy:
 
-# Volume spike detection
-"volume > sma(volume, 50) * 1.5"
-
-# Normalized price position
-"(close - min_roll(low, 50)) / (max_roll(high, 50) - min_roll(low, 50)) * 100"
-
-# Custom RSI-like (with parameter)
-"ema(gain, {period}) / ema(loss, {period})"
-# where gain/loss are precomputed in the Feature Store
+```json
+{"indicator": "momentum_12", "op": "gt", "value": 0}
 ```
 
 ### Testing a Formula First
@@ -293,35 +398,25 @@ curl -X POST http://localhost:8000/indicators/test \
   -d '{"formula": "volume > sma(volume, 50) * 1.5", "sample_limit": 5}'
 ```
 
-Returns sample values on recent data so the agent can verify the formula works.
+## 10. Data Sources
 
-**Important:** The API server needs to be running separately:
-```bash
-docker compose exec -d app python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
-```
-
-### Adding a New Data Source
-
-Any agent can register a new external data source at runtime.
-A registered source costs ~1KB on disk. It is NOT fetched until:
-  a) A strategy references its column
-  b) An agent calls `POST /data-sources/{name}/fetch`
+### Architecture
 
 ```
 POST /data-sources (register)
   ↓
-data/sources/{name}.json  (1KB, 0 CPU)
-  ↓ (first use triggers fetch)
+data/sources/{name}.json  (definition, ~1KB)
+  ↓ (on first use or manual fetch)
 data/external/{name}/{YYYY-MM}.parquet  (raw data)
   ↓ (aligner)
 data/external_aligned/{timeframe}/{name}.parquet  (regular timestamps)
   ↓ (feature rebuild)
 data/features/btcusdt/{YYYY-MM}.parquet  (column available)
   ↓ (strategy uses it)
-{"indicator": "vix", "op": "lt", "value": 25}  ← auto-discovered
+{"indicator": "vix", "op": "lt", "value": 25}
 ```
 
-#### Registering a Data Source
+### Registering a Data Source
 
 ```bash
 curl -X POST http://localhost:8000/data-sources \
@@ -342,13 +437,12 @@ curl -X POST http://localhost:8000/data-sources \
     "columns": {"value": "vix"},
     "align": {
       "method": "ffill",
-      "decay_periods": 0,
       "target_timeframes": ["15m", "1h"]
     }
   }'
 ```
 
-#### Definition Fields
+### Definition Fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -356,147 +450,66 @@ curl -X POST http://localhost:8000/data-sources \
 | `url` | ✅ | HTTPS endpoint |
 | `schedule` | ✅ | Fetch interval: "5m", "1h", "1d" |
 | `parse.type` | ✅ | "json" or "csv" |
-| `parse.timestamp_field` | ✅ | Dotted path to timestamp field (supports arrays: `obs[].date`) |
+| `parse.timestamp_field` | ✅ | Dotted path to timestamp field |
 | `parse.value_field` | ✅ | Dotted path to value field |
-| `columns` | ✅ | Map `{"value": "vix"}` — column name in Feature Store |
+| `columns` | ✅ | Map `{"value": "column_name"}` |
 | `align.method` | ✅ | "ffill", "interpolate", "sum", "avg" |
 | `api_key` | ❌ | API key (stored in JSON, unencrypted for POC) |
 
-#### Fetching and Using
+### Concrete Example: Fear & Greed Index (already registered)
 
 ```bash
-# Force fetch immediately
-curl -X POST http://localhost:8000/data-sources/fred_vix/fetch
-
-# The column is now available in any strategy
-```
-
-```json
-{"indicator": "vix", "op": "lt", "value": 25}  ← auto-discovered
-```
-
-#### Concrete Example: Fear & Greed Index (already registered)
-
-A working data source currently registered in the system:
-
-```bash
-# 1. View the registered source
+# View the registered source
 curl http://localhost:8000/data-sources/fear_greed
 
-# 2. Force a fresh fetch
+# Force a fresh fetch
 curl -X POST http://localhost:8000/data-sources/fear_greed/fetch
 
-# 3. Use in any strategy immediately
+# Use in any strategy
 ```
-
 ```json
 {"indicator": "fear_greed", "op": "lt", "value": 25}
 ```
 
-The Fear & Greed index is a free API (alternative.me) that provides daily market sentiment
-from 0 (extreme fear) to 100 (extreme greed). 3,018 historical rows (2018-present).
-
-#### Registering a New Data Source
-
-```bash
-curl -X POST http://localhost:8000/data-sources \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "my_source",
-    "url": "https://api.example.com/data",
-    "description": "My custom data",
-    "params": {"api_key": "..."},
-    "schedule": "1h",
-    "parse": {
-      "type": "json",
-      "timestamp_field": "data[].timestamp",
-      "value_field": "data[].value",
-      "value_transform": "float"
-    },
-    "columns": {"value": "my_indicator"},
-    "align": {
-      "method": "ffill",
-      "decay_periods": 0,
-      "target_timeframes": ["15m", "1h"]
-    }
-  }'
-```
-
-#### Definition Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | ✅ | Unique identifier (alphanumeric + underscores) |
-| `url` | ✅ | HTTPS endpoint |
-| `schedule` | ✅ | Fetch interval: "5m", "1h", "1d" |
-| `parse.type` | ✅ | "json" or "csv" |
-| `parse.timestamp_field` | ✅ | Dotted path to timestamp field (supports arrays: `data[].timestamp`) |
-| `parse.value_field` | ✅ | Dotted path to value field |
-| `columns` | ✅ | Map `{"value": "column_name"}` — column name in Feature Store |
-| `align.method` | ✅ | "ffill", "interpolate", "sum", "avg" |
-| `api_key` | ❌ | API key (stored in JSON, unencrypted for POC) |
-
-#### Fetching and Using
-
-```bash
-# Force fetch immediately
-curl -X POST http://localhost:8000/data-sources/my_source/fetch
-
-# The column is now available in any strategy
-```
-
-```json
-{"indicator": "my_indicator", "op": "lt", "value": 25}
-```
-
-#### Response on Fetch
-
-```json
-{
-  "status": "fetched",
-  "name": "fred_vix",
-  "rows": 365,
-  "columns": ["vix"],
-  "timeframes": ["15m", "1h"]
-}
-```
-
-#### Edge Cases
+### Edge Cases
 
 | Scenario | Behavior |
 |----------|----------|
 | **No historical data** (new source) | Only data from first fetch. Backtest limited to that range |
 | **Payload > 1MB** | Truncates to last 365 days |
-| **Irregular timestamps** (news) | Aligner does ffill with optional decay |
+| **Irregular timestamps** | Aligner does ffill with optional decay |
 | **API down** | Column has NaN. Strategies don't generate signals |
 | **Duplicate registration** | 409 Conflict — use DELETE first |
-| **News/sentiment** | Multiple events per vela → averaged |
 
-### Running Research via API
+## 11. Open Questions
 
-```bash
-curl -X POST http://localhost:8000/research/run \
-  -H "Content-Type: application/json" \
-  -d '{"n_strategies": 10, "days": 365, "resample": "15m", "rounds": 2}'
-```
+Decisiones pendientes que afectan al diseño futuro. Cualquier agente debe conocerlas.
 
-Returns immediately (async). Progress is visible in the logs:
-```bash
-docker compose logs app -f
-```
+| # | Pregunta | Decisión Actual |
+|---|---|---|
+| Q1 | MCP como protocolo interno? | ❌ No para la POC. Tool calling directo. |
+| Q2 | Computar indicadores on the fly o precomputar todo? | On the fly + LRU cache. Persistir solo si se usa 3+ veces. |
+| Q3 | Cola de mensajes para distribución? | SQLite + asyncio.Queue para POC. Redis si multi-host. |
+| Q4 | Feature engineering automático o controlado? | Automático con sugerencia humana. |
+| Q5 | Feature store versionado? | Pendiente. Mientras, overwrite. |
+| Q6 | Portfolio optimization en POC? | No. Apuntado para Phase 31. |
+| Q7 | Evaluación de cuentas fondeadas? | No tocar hasta post-POC. |
+| Q8 | Eliminar legacy (store.py, research/loop.py, MCP servers)? | Sí, en Phase 31. |
+| Q9 | Embeddings locales o vía API? | Locales con sentence-transformers. |
+| Q10 | Tests en CI/CD? | No para la POC. Tests manuales via pytest. |
 
-Or check the leaderboard:
-```bash
-curl http://localhost:8000/leaderboard?top=5
-```
+## 12. Roadmap
 
-### Agent Workflow (recommended)
+| Fase | Qué | Días | Dependencia |
+|---|---|---|---|
+| **24** | Foundation Fix (docs, identidad, backlog) | 1-2 | — |
+| **25** | Test Foundation (cobertura >70% crítico) | 7-10 | 24 |
+| **26** | Unified Store (resolver dualidades) | 4-5 | 25 |
+| **27** | True Memory (episódica + semántica) | 5-6 | 25, 26 |
+| **28** | Multi-step Reasoning (ciclo reflexivo) | 4-5 | 27 |
+| **29** | Distributed Specialization (workers paralelos) | 5-6 | 28 |
+| **30** | Real-time Cognitive Loop (brain + live data) | 4-5 | 29 |
+| **31** | Meta-cognition & Portfolio | 5-7 | 30 |
+| **32+** | External Intelligence (RSS, MCP sources, papers) | 6-8 | 31 |
 
-```
-1. GET /system       → understand current state (data, indicators)
-2. POST /indicators/test → test a new indicator formula
-3. POST /indicators  → register the indicator
-4. POST /research/run → run research with the new indicator
-5. GET /leaderboard  → see results
-6. GET /strategies   → inspect successful strategies
-```
+Ver [BACKLOG.md](./BACKLOG.md) para tareas detalladas por fase.

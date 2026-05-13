@@ -1,5 +1,8 @@
 """Automated research loop — generates, backtests, and records strategies.
 
+⚠️ DEPRECATED — use src.brain.orchestrator (LLM-guided) instead.
+Kept for backward compatibility. Will be removed in Phase 31.
+
 Saves results progressively so partial progress survives timeout/crash.
 
 Usage:

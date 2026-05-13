@@ -1,14 +1,10 @@
 """Feature Store — Parquet with precomputed indicators.
 
+⚠️ DEPRECATED — use src.ts_store (frequency="features") instead.
+Kept for backward compatibility during migration. Will be removed in Phase 31.
+
 Layout:  data/features/{symbol}/{YYYY-MM}.parquet
 Schema: ts + all columns from calc_all() (dynamic, inferred from DataFrame)
-
-The store is write-once, read-many. Indicators are precomputed during
-build and updated in real-time via main.py's on_candle_close.
-
-Usage:
-    from src.features.store import write, read, available_range
-    df = read("btcusdt", start=..., end=...)  # OHLCV + indicators
 """
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_MEMORY_PATH = Path(__file__).resolve().parents[2] / "data" / "parquet" / "research" / "fingerprints.jsonl"
+_MEMORY_PATH = Path(__file__).resolve().parents[2] / "data" / "ts" / "_fingerprints.jsonl"
 
 
 def fingerprint(strategy_dict: dict) -> str:
