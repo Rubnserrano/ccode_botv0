@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 STATE_PATH = DATA_DIR / "paper_state.json"
@@ -63,11 +64,29 @@ else:
 # ── Equity curve ──
 if not equity.empty:
     st.subheader("Equity Curve")
-    chart_data = equity.set_index("ts")[["capital", "equity"]]
-    st.line_chart(chart_data)
 
-    st.subheader("Recent Data")
-    st.dataframe(equity.tail(10).round(2), use_container_width=True)
+    chart_df = equity.set_index("ts")[["capital", "equity"]].reset_index()
+
+    min_val = chart_df[["capital", "equity"]].min().min()
+    max_val = chart_df[["capital", "equity"]].max().max()
+    pad = (max_val - min_val) * 0.1 or 100
+
+    chart = (
+        alt.Chart(chart_df)
+        .transform_fold(["capital", "equity"], as_=["variable", "value"])
+        .mark_line()
+        .encode(
+            x=alt.X("ts:T", title=None),
+            y=alt.Y("value:Q", title="USD", scale=alt.Scale(domain=[min_val - pad, max_val + pad])),
+            color=alt.Color("variable:N", legend=alt.Legend(title=None)),
+        )
+        .properties(height=400)
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    with st.expander("Recent Data"):
+        st.dataframe(equity.tail(20).round(2), use_container_width=True)
 
 # ── Raw state ──
 with st.expander("Raw State"):

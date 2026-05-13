@@ -62,14 +62,21 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
             return False
 
         op = cond.op
+        cmp_val = cond.value
+        # Safely coerce value to numeric
+        if not isinstance(cmp_val, (int, float)):
+            try:
+                cmp_val = float(cmp_val)
+            except (ValueError, TypeError):
+                return False
 
         if op in ("lt", "gt", "lte", "gte", "eq", "ne"):
-            if op == "lt":   return value < cond.value
-            if op == "gt":   return value > cond.value
-            if op == "lte":  return value <= cond.value
-            if op == "gte":  return value >= cond.value
-            if op == "eq":   return value == cond.value
-            if op == "ne":   return value != cond.value
+            if op == "lt":   return value < cmp_val
+            if op == "gt":   return value > cmp_val
+            if op == "lte":  return value <= cmp_val
+            if op == "gte":  return value >= cmp_val
+            if op == "eq":   return value == cmp_val
+            if op == "ne":   return value != cmp_val
 
         elif op in ("cross_above", "cross_below"):
             if i == 0:
@@ -78,9 +85,9 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
             if pd.isna(prev) or pd.isna(value):
                 return False
             if op == "cross_above":
-                return prev <= cond.value and value > cond.value
+                return prev <= cmp_val and value > cmp_val
             else:
-                return prev >= cond.value and value < cond.value
+                return prev >= cmp_val and value < cmp_val
 
         elif op in ("gt_rolling", "lt_rolling"):
             roll = calc_rolling(series, cond.rolling, cond.period)

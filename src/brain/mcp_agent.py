@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
+
+_telegram = None
+
+
+async def _maybe_notify(method: str, *args, **kwargs) -> None:
+    """Call a telegram notification method if configured."""
+    global _telegram
+    if _telegram is None:
+        if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+            _telegram = True
+        else:
+            _telegram = False
+    if not _telegram:
+        return
+    try:
+        from src.notification.telegram import (
+            notify_start, notify_strategy_found, notify_digest,
+            notify_hourly_leaderboard, notify_done,
+        )
+        func = {
+            "start": notify_start,
+            "strategy": notify_strategy_found,
+            "digest": notify_digest,
+            "hourly": notify_hourly_leaderboard,
+            "done": notify_done,
+        }.get(method)
+        if func:
+            await func(*args, **kwargs)
+    except Exception as e:
+        logger.warning("telegram notification failed: %s", e)
 
 
 # ─── Tool definitions (OpenAI-compatible format) ──────────────────────────
@@ -248,10 +279,16 @@ async def _handle_tool_call(name: str, args: dict) -> str:
         freq = args.get("frequency", "15m")
         days = args.get("days", 180)
 
+        # Validate strategy
         try:
             sd = validate_strategy(strategy_dict)
         except Exception as e:
             return f"Strategy validation error: {e}"
+
+        # Validate values are numeric
+        for c in sd.entry_conditions:
+            if c.value is not None and not isinstance(c.value, (int, float)):
+                return f"Invalid non-numeric value '{c.value}' for indicator '{c.indicator}'. Use numeric values only."
 
         start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
         name_part = asset_id.split(":")[-1]
@@ -271,16 +308,19 @@ async def _handle_tool_call(name: str, args: dict) -> str:
         def eval_fn(d):
             return evaluate(d, sd)
 
-        trades, summary = backtest(
-            df, eval_fn,
-            horizon=sd.exit.horizon_bars,
-            warmup=50, cooldown=2,
-            size_usdc=50,
-            tp_pct=sd.exit.tp_pct,
-            sl_pct=sd.exit.sl_pct,
-        )
+        try:
+            trades, summary = backtest(
+                df, eval_fn,
+                horizon=sd.exit.horizon_bars,
+                warmup=50, cooldown=2,
+                size_usdc=50,
+                tp_pct=sd.exit.tp_pct,
+                sl_pct=sd.exit.sl_pct,
+            )
+        except Exception as e:
+            return f"Backtest error: {e}"
 
-        return json.dumps({
+        result = {
             "name": sd.name,
             "sharpe": round(summary.get("sharpe", 0), 4),
             "win_rate": round(summary.get("win_rate", 0), 4),
@@ -289,7 +329,24 @@ async def _handle_tool_call(name: str, args: dict) -> str:
             "max_dd": round(summary.get("max_dd", 0), 2),
             "n_trades": summary.get("n_trades", 0),
             "passes_gates": bool(summary.get("passes_gates", False)),
-        }, indent=2, default=str)
+        }
+
+        # Auto-save every tested strategy to leaderboard
+        try:
+            from src.research.leaderboard import append_result
+            row = {
+                "run_id": sd.name,
+                "generation": 0,
+                **result,
+                "rules_json": json.dumps(strategy_dict),
+                "config_json": json.dumps({"source": "mcp_agent", "auto_saved": True}),
+                "elapsed_bt": 0,
+            }
+            append_result(row, strategy_dict)
+        except Exception:
+            pass
+
+        return json.dumps(result, indent=2, default=str)
 
     elif name == "compare_strategies":
         results = []
@@ -381,28 +438,25 @@ async def _handle_tool_call(name: str, args: dict) -> str:
 
 # ─── Agent loop ───────────────────────────────────────────────────────────
 
-AGENT_SYSTEM_PROMPT = """Eres un investigrador cuantitativo autónomo. Tu objetivo es encontrar estrategias de trading robustas.
+AGENT_SYSTEM_PROMPT = """Eres un investigrador cuantitativo autónomo. Tu objetivo es generar y validar estrategias de trading.
 
-TIENES ACCESO A HERRAMIENTAS. Debes usarlas en este orden:
-
-1. **list_available_assets** → mira qué datos existen
-2. **get_market_regime** → entiende el mercado actual
-3. **search_past_strategies** → aprende de intentos previos
-4. **query_market** → examina los datos actuales
-5. **test_strategy** → prueba tu hipótesis
-6. **compare_strategies** → si tienes variantes, compáralas
-7. **save_strategy** → solo si Sharpe > 0.5 y n_trades >= 20
+INSTRUCCIONES ESTRICTAS:
+1. Primero llama a **list_available_assets** y **get_market_regime** para entender el mercado
+2. Luego llama a **test_strategy** para CADA estrategia que quieras probar — USA SIEMPRE valores NUMÉRICOS
+3. Después de CADA test_strategy, modifica condiciones y vuelve a probar si el resultado es malo
+4. Genera y prueba EXACTAMENTE {n} estrategias diferentes
 
 REGLAS:
-- Siempre empieza por entender el mercado antes de generar estrategias
-- Si una estrategia da Sharpe < 0.3, itera: cambia condiciones o salidas
-- Estrategias con Sharpe > 0.8 pero < 30 trades = overfitting, no las guardes
-- Prefiere condiciones simples (1-2) sobre complejas
+- "value" debe ser SIEMPRE un número, NUNCA un string
+- Valores típicos: rsi 20-80, atr 0.1-2.0, volume 10-500, adx 15-50, ema 5-100
+- Si una estrategia da 0 trades, cambia las condiciones
 - El ratio TP/SL debe ser al menos 2:1
-- Si ves que una idea no funciona después de 3 intentos, cambia de enfoque
-- Cuando termines, explica brevemente qué encontraste y por qué
+- Prefiere 1-2 condiciones, no más
 
-Genera EXACTAMENTE {n} estrategias que pasen los filtros.
+IMPORTANTE: NO te detengas después de analizar el mercado. DEBES generar y probar estrategias.
+Usa test_strategy múltiples veces hasta probar {n} estrategias.
+
+Indicadores disponibles: rsi, regime, volume, adx, atr, macd, ema, close, vwap, obi
 """
 
 
@@ -421,15 +475,16 @@ async def run_round(
     system = AGENT_SYSTEM_PROMPT.format(n=n_strategies)
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Investiga el mercado actual y genera {n_strategies} estrategias sólidas. Usa las herramientas disponibles."},
+        {"role": "user", "content": f"Analiza el mercado y genera {n_strategies} estrategias. OBLIGATORIO: usa test_strategy al menos {n_strategies} veces con diferentes condiciones. NO termines sin probar estrategias."},
     ]
 
     all_saved = []
     tool_call_count = 0
+    test_count = 0
 
     while tool_call_count < max_tool_calls:
         response = await llm_client._call_model(
-            model=llm_client.MODEL_CHAIN[0]["name"],
+            model="deepseek/deepseek-chat",
             system="",  # system is in messages
             user="",
             response_format=None,  # no JSON mode when using tools
@@ -458,6 +513,9 @@ async def run_round(
                 messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
+                if name == "test_strategy":
+                    test_count += 1
+
                 # If saving, track it
                 if name == "save_strategy":
                     try:
@@ -465,9 +523,13 @@ async def run_round(
                     except Exception:
                         pass
         else:
-            # LLM returned text — it's done
             content = msg.get("content", "")
             logger.info("Agent response: %s", content[:300] if content else "(empty)")
+            # If LLM hasn't tested any strategies, force it
+            if test_count < n_strategies:
+                logger.info("Force: LLM responded without testing — pushing to test strategies")
+                messages.append({"role": "user", "content": f"No has probado suficientes estrategias. Usa test_strategy para probar AL MENOS {n_strategies} estrategias diferentes con distintos indicadores y valores. NO respondas sin probar."})
+                continue
             break
 
     return all_saved
@@ -490,7 +552,20 @@ async def main():
         return
 
     llm = LLMClient(api_key=api_key)
+
+    # Market context for Telegram
+    market_ctx = ""
+    try:
+        from src.query import get_regime
+        r = get_regime("market:binance:btcusdt", "15m", 200)
+        regime_names = {0: "ranging", 1: "uptrend", 2: "downtrend"}
+        market_ctx = " · ".join(f"{regime_names.get(int(k), k)}:{v:.0%}" for k, v in r.items())
+    except Exception:
+        pass
+
+    await _maybe_notify("start", args.rounds, args.strategies, 365, "15m", market_ctx)
     total_start = time.time()
+    all_saved = []
 
     for round_num in range(args.rounds):
         print(f"\n{'='*60}")
@@ -503,11 +578,27 @@ async def main():
         print(f"\n  Round {round_num + 1}: {len(saved)} strategies saved ({elapsed:.0f}s)")
         for s in saved:
             print(f"    ✅ {s.get('name', '?')} — Sharpe={s.get('sharpe', 0):.2f}")
+            # Notify each saved strategy
+            await _maybe_notify("strategy",
+                s.get("name", "?"), s.get("sharpe", 0), s.get("win_rate", 0),
+                s.get("profit_factor", 0), s.get("total_pnl", 0), s.get("n_trades", 0),
+                "", json.dumps({"tp_pct": 0.04, "sl_pct": 0.015}),
+            )
+        all_saved.extend(saved)
 
     total = time.time() - total_start
     print(f"\n{'='*60}")
     print(f"  Complete: {total:.0f}s | {args.rounds} rounds | OpenRouter cost: ${llm.total_cost:.4f}")
     print(f"{'='*60}")
+
+    # Final Telegram notification
+    await _maybe_notify("done",
+        total / 3600, args.rounds * args.strategies, len(all_saved),
+        max((s.get("sharpe", 0) for s in all_saved), default=0),
+        max((s.get("name", "") for s in all_saved), default=""),
+        llm.total_cost,
+        all_saved if all_saved else None,
+    )
 
     await llm.close()
 

@@ -1,0 +1,20 @@
+{
+  "name": "estrat_6",
+  "entry_conditions": [
+    {
+      "indicator": "volume",
+      "op": "gt",
+      "value": 500
+    },
+    {
+      "indicator": "regime",
+      "op": "lt",
+      "value": 1
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.045,
+    "sl_pct": 0.022,
+    "horizon_bars": 54
+  }
+}

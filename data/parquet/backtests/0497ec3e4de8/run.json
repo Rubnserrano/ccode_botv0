@@ -1,0 +1,28 @@
+{
+  "run_id": "0497ec3e4de8",
+  "strategy": "rsi_mean_reversion",
+  "config": {
+    "strategy": "rsi_mean_reversion",
+    "symbol": "btcusdt",
+    "horizon": 12,
+    "warmup": 50,
+    "cooldown": 2,
+    "size_usdc": 50.0,
+    "days": 365
+  },
+  "summary": {
+    "n_trades": 30251,
+    "wins": 3000,
+    "losses": 27251,
+    "win_rate": 0.0992,
+    "total_pnl": -3421.47,
+    "avg_pnl": -0.11,
+    "sharpe": -1.0664,
+    "sortino": -1.3008,
+    "max_dd": -3421.47,
+    "profit_factor": 0.0648,
+    "p_value": 0.0,
+    "passes_gates": false
+  },
+  "run_at": "2026-05-11T14:57:53.756059+00:00"
+}

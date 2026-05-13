@@ -1,0 +1,27 @@
+{
+  "name": "fear_greed_ranging",
+  "entry_operator": "all",
+  "entry_conditions": [
+    {
+      "indicator": "fear_greed",
+      "op": "lt",
+      "value": 30,
+      "params": {},
+      "rolling": null,
+      "period": null
+    },
+    {
+      "indicator": "regime",
+      "op": "eq",
+      "value": 0,
+      "params": {},
+      "rolling": null,
+      "period": null
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.04,
+    "sl_pct": 0.015,
+    "horizon_bars": 48
+  }
+}

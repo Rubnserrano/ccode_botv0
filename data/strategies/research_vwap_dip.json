@@ -1,0 +1,20 @@
+{
+  "name": "vwap_dip",
+  "entry_conditions": [
+    {
+      "indicator": "close",
+      "op": "lt",
+      "value": 64000
+    },
+    {
+      "indicator": "vwap",
+      "op": "gt",
+      "value": 65000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.06,
+    "sl_pct": 0.03,
+    "horizon_bars": 36
+  }
+}

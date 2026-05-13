@@ -1,0 +1,15 @@
+{
+  "name": "ha_trend_reversal",
+  "entry_conditions": [
+    {
+      "indicator": "ha_close",
+      "op": "lt",
+      "value": 64000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.03,
+    "sl_pct": 0.015,
+    "horizon_bars": 48
+  }
+}

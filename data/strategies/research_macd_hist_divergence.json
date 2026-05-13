@@ -1,0 +1,20 @@
+{
+  "name": "macd_hist_divergence",
+  "entry_conditions": [
+    {
+      "indicator": "macd_hist",
+      "op": "gt",
+      "value": 0
+    },
+    {
+      "indicator": "close",
+      "op": "lt",
+      "value": 66000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.03,
+    "sl_pct": 0.015,
+    "horizon_bars": 48
+  }
+}
