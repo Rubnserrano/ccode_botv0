@@ -146,7 +146,7 @@ FAMILY_TEMPLATES: dict[HypothesisFamily, dict[str, Any]] = {
             {"indicator": "volume", "op": "gt_rolling", "rolling": "sma", "period": 20},
         ],
         "feature_requirements": [
-            {"name": "breakout_pct_above_high", "formula": "(close - max_roll(high, {range_period})) / max_roll(high, {range_period})", "description": "Percentage above rolling high"},
+            {"name": "breakout_pct_above_high", "formula": "(close - max_roll(high.shift(1), {range_period})) / max_roll(high.shift(1), {range_period})", "description": "Percentage above previous rolling high (shifted to avoid lookahead)"},
         ],
     },
     HypothesisFamily.VOLATILITY_COMPRESSION_BREAKOUT: {
