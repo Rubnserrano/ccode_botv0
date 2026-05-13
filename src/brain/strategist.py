@@ -41,6 +41,64 @@ def _build_concept_summary() -> str:
     return "\n".join(lines)
 
 
+def _parse_json_robust(raw: str):
+    """Parse JSON from LLM output, handling truncation and trailing content.
+
+    Strategies:
+      1. Direct parse
+      2. Strip trailing incomplete key/value (cut at last '}')
+      3. Strip trailing incomplete string (cut at last '"')
+      4. Try to extract a JSON array or object via regex
+    """
+    text = raw.strip()
+    if not text:
+        return None
+
+    # 1. Direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Find last closing brace/bracket and attempt parse
+    for closer, opener in [('}', '{'), (']', '[')]:
+        last_close = text.rfind(closer)
+        if last_close > 0:
+            candidate = text[:last_close + 1]
+            # If nested inside a larger structure, find matching opener
+            opener_pos = candidate.rfind(opener)
+            if opener_pos >= 0:
+                try:
+                    return json.loads(candidate[opener_pos:])
+                except json.JSONDecodeError:
+                    pass
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+    # 3. Find last complete key-value pair (regex for "key": value patterns)
+    import re
+    for pattern in [r'\{[^{}]*\}', r'\[[^\[\]]*\]']:
+        matches = re.findall(pattern, text)
+        for match in reversed(matches):
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+
+    # 4. Try to fix truncated strings: find last " and try closing
+    last_quote = text.rfind('"')
+    if last_quote > 0:
+        candidate = text[:last_quote + 1] + '}'
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 async def generate_hypotheses(
     llm: LLMClient,
     market_context: str,
@@ -91,15 +149,15 @@ async def generate_hypotheses(
         system_prompt=system,
         user_prompt=user_prompt,
         response_format="json_object",
+        max_tokens=8192,
     )
 
     raw = response["content"]
 
     if isinstance(raw, str):
-        try:
-            hypotheses = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("brain: LLM returned invalid JSON: %s", raw[:200])
+        hypotheses = _parse_json_robust(raw)
+        if hypotheses is None:
+            logger.warning("brain: LLM returned unparseable JSON (%d chars): %s", len(raw), raw[:200])
             return []
     elif isinstance(raw, list):
         hypotheses = raw
