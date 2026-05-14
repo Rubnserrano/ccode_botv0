@@ -188,7 +188,7 @@ async def run_round(
     results = []
 
     # Fast filter on last 60d of TRAIN (no data leakage)
-    fast_bars = min(5760, len(df_train) - 100)
+    fast_bars = min(1440, len(df_train) - 100)
     df_fast = df_train.iloc[-fast_bars:].reset_index(drop=True)
 
     # Track rejection reasons
