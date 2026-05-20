@@ -1,0 +1,15 @@
+{
+  "name": "ha_open_confirmation",
+  "entry_conditions": [
+    {
+      "indicator": "ha_open",
+      "op": "lt",
+      "value": 66000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.03,
+    "sl_pct": 0.015,
+    "horizon_bars": 24
+  }
+}

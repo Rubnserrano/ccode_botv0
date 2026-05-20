@@ -1,0 +1,20 @@
+{
+  "name": "price_range",
+  "entry_conditions": [
+    {
+      "indicator": "close",
+      "op": "gt",
+      "value": 64000
+    },
+    {
+      "indicator": "close",
+      "op": "lt",
+      "value": 66000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.02,
+    "sl_pct": 0.01,
+    "horizon_bars": 24
+  }
+}

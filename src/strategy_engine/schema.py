@@ -5,10 +5,13 @@ Conditions are combined with AND logic.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-VALID_OPS = {"lt", "gt", "lte", "gte", "eq", "ne",
+logger = logging.getLogger(__name__)
+
+VALID_OPS = {"lt", "gt", "lte", "gte", "eq", "ne", "in",
              "cross_above", "cross_below",
              "gt_rolling", "lt_rolling",
              "streak_gte", "streak_lte"}
@@ -40,6 +43,7 @@ class StrategyDef:
     entry_conditions: list[Condition]
     exit: ExitRules = field(default_factory=ExitRules)
     entry_operator: str = "all"  # only "all" (AND) for now
+    direction: str = "long"  # "long" or "short"
 
 
 def validate_condition(c: dict) -> Condition:
@@ -60,6 +64,9 @@ def validate_condition(c: dict) -> Condition:
             raise ValueError(f"Invalid rolling '{c['rolling']}'. Valid: {VALID_ROLLING}")
         if "period" not in c:
             raise ValueError(f"op '{op}' requires 'period' field")
+    value = c.get("value")
+    if value is not None and not isinstance(value, (int, float)):
+        logger.warning("Non-numeric value '%s' for indicator '%s', coercing", value, c.get("indicator"))
     return Condition(
         indicator=c["indicator"],
         op=op,
@@ -78,9 +85,14 @@ def validate_strategy(sd: dict) -> StrategyDef:
         raise ValueError("Strategy missing 'entry_conditions'")
     conditions = [validate_condition(c) for c in sd["entry_conditions"]]
     exit_rules = ExitRules(**sd.get("exit", {}))
+    direction = sd.get("direction", "long")
+    if direction not in ("long", "short"):
+        logger.warning("Invalid direction '%s', defaulting to 'long'", direction)
+        direction = "long"
     return StrategyDef(
         name=sd["name"],
         entry_conditions=conditions,
         exit=exit_rules,
         entry_operator=sd.get("entry_operator", "all"),
+        direction=direction,
     )

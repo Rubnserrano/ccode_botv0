@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 
 import asyncpg
 
-from src.store import read, available_range
+from src.ts_store import read as ts_read
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,8 @@ class TimescaleDB:
         """
         latest = await self.latest_ts(symbol)
         start_param = latest + timedelta(milliseconds=1) if latest else None
-        df = read(exchange, symbol, start=start_param)
+        asset_id = f"market:{exchange}:{symbol.lower()}"
+        df = ts_read(asset_id, frequency="raw", start=start_param)
         if df.empty:
             logger.info("tsdb: sync %s — no new data", symbol)
             return 0

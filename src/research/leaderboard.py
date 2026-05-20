@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_LEADERBOARD_DIR = Path(__file__).resolve().parents[2] / "data" / "parquet" / "research"
+_LEADERBOARD_DIR = Path(__file__).resolve().parents[2] / "data" / "ts" / "_leaderboard"
 _JSONL_PATH = _LEADERBOARD_DIR / "leaderboard.jsonl"
 _PARQUET_PATH = _LEADERBOARD_DIR / "leaderboard.parquet"
 
@@ -26,8 +26,9 @@ _SCHEMA_COLS = [
     "elapsed_bt",
     "llm_model", "llm_explanation", "llm_suggestions", "llm_confidence",
     # Out-of-sample (OOS) validation
-    "wf_sharpe", "wf_passes",
+    "wf_sharpe", "wf_sharpe_std", "wf_cv", "wf_passes",
     "oos_sharpe", "oos_trades", "overfit",
+    "archetype",
 ]
 
 

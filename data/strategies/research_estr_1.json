@@ -1,0 +1,20 @@
+{
+  "name": "estr_1",
+  "entry_conditions": [
+    {
+      "indicator": "adx",
+      "op": "lt",
+      "value": 15
+    },
+    {
+      "indicator": "regime",
+      "op": "gt",
+      "value": 0
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.04,
+    "sl_pct": 0.02,
+    "horizon_bars": 48
+  }
+}

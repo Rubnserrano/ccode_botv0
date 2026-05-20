@@ -26,7 +26,7 @@ def backtest(
     horizon: int = 12,
     warmup: int = 50,
     cooldown: int = 2,
-    size_usdc: float = 50.0,
+    size_usdc: float = 500.0,
     taker_fee: float = 0.001,
     spread_bps: float = 2.0,
     tp_pct: float = 0.005,

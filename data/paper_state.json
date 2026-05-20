@@ -1,0 +1,16 @@
+{
+  "initial_capital": 10000.0,
+  "capital": 9950.0,
+  "equity": 10000.0,
+  "position": {
+    "side": "SHORT",
+    "entry_price": 79715.01,
+    "size_usdc": 50.0,
+    "bars_held": 0,
+    "horizon_bars": 12
+  },
+  "total_pnl": 0.0,
+  "total_fees": 0.0,
+  "n_trades": 0,
+  "updated_at": "2026-05-13T18:33:00.198325+00:00"
+}

@@ -1,0 +1,33 @@
+{
+  "name": "test_manual",
+  "url": "https://example.com",
+  "description": "",
+  "params": {},
+  "headers": {},
+  "schedule": "1h",
+  "parse": {
+    "type": "json",
+    "timestamp_field": "ts",
+    "value_field": "value",
+    "value_transform": "float"
+  },
+  "columns": {
+    "value": "test_col"
+  },
+  "align": {
+    "method": "ffill",
+    "decay_periods": 0,
+    "target_timeframes": [
+      "15m"
+    ]
+  },
+  "rate_limit": {
+    "max_calls_per_hour": 60,
+    "cooldown_seconds": 60
+  },
+  "storage_quota_mb": 100,
+  "api_key": "",
+  "enabled": true,
+  "last_fetch_at": "",
+  "total_rows": 0
+}

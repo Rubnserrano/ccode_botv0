@@ -134,10 +134,10 @@ def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
         (high - close.shift()).abs(),
         (low - close.shift()).abs(),
     ], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean().replace(0, pd.NA)
+    atr = tr.rolling(period).mean().replace(0, np.nan)
     plus_di = 100 * plus_dm.rolling(period).mean() / atr
     minus_di = 100 * minus_dm.rolling(period).mean() / atr
-    dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)) * 100
+    dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
     return dx.rolling(period).mean()
 
 
@@ -192,5 +192,54 @@ def calc_all(df: pd.DataFrame) -> pd.DataFrame:
     result["atr_14"] = calc_atr(result, 14)
     result["adx_14"] = calc_adx(result, 14)
     result["regime"] = detect_regime(result)
+
+    # Derivatives indicators (computed from external columns if present)
+    result = calc_derivatives_indicators(result)
+
+    return result
+
+
+def calc_derivatives_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add derivative indicators when derivatives data columns exist.
+
+    Columns added:
+    - funding_rate_8h: raw funding rate (already ffill'd)
+    - funding_rate_ma: rolling mean of funding rate
+    - funding_rate_zscore: z-score of funding rate
+    - oi_growth: % change in open interest (24 bars)
+    - oi_growth_ma: rolling mean of OI growth
+    - ls_ratio_ma: rolling mean of long/short ratio
+    - crowded_longs: binary flag (long_short_ratio > threshold)
+    - crowded_shorts: binary flag (long_short_ratio < threshold)
+    - abs_funding_rate: absolute value of funding rate
+    - taker_ratio_ma: rolling mean of taker ratio
+    """
+    result = df.copy()
+
+    if "funding_rate" in result.columns:
+        fr = result["funding_rate"].ffill().bfill()
+        result["funding_rate"] = fr
+        result["funding_rate_ma"] = fr.rolling(21, min_periods=3).mean()
+        fr_std = fr.rolling(21, min_periods=3).std()
+        result["funding_rate_zscore"] = (fr - result["funding_rate_ma"]) / fr_std.replace(0, np.nan)
+        result["abs_funding_rate"] = fr.abs()
+
+    if "open_interest" in result.columns:
+        oi = result["open_interest"].ffill().bfill()
+        result["open_interest"] = oi
+        result["oi_growth"] = oi.pct_change(24) * 100
+        result["oi_growth_ma"] = result["oi_growth"].rolling(12, min_periods=3).mean()
+
+    if "long_short_ratio" in result.columns:
+        ls = result["long_short_ratio"].ffill().bfill()
+        result["long_short_ratio"] = ls
+        result["ls_ratio_ma"] = ls.rolling(21, min_periods=3).mean()
+        result["crowded_longs"] = (ls > 1.3).astype(float)
+        result["crowded_shorts"] = (ls < 0.7).astype(float)
+
+    if "taker_ratio" in result.columns:
+        tr = result["taker_ratio"].ffill().bfill()
+        result["taker_ratio"] = tr
+        result["taker_ratio_ma"] = tr.rolling(12, min_periods=3).mean()
 
     return result

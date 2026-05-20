@@ -23,8 +23,9 @@ services:
     environment:
       TIMESCALE_DSN: postgres://ccode:ccode@timescaledb:5432/ccode
       LOG_LEVEL: INFO
+      PAPER_STRATEGY: ema_trend
     volumes:
-      - parquet_data:/app/data
+      - ./data:/app/data
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -32,4 +33,3 @@ services:
 
 volumes:
   timescale_data:
-  parquet_data:

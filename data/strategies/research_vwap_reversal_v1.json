@@ -1,0 +1,20 @@
+{
+  "name": "vwap_reversal_v1",
+  "entry_conditions": [
+    {
+      "indicator": "close",
+      "op": "lt",
+      "value": 65000
+    },
+    {
+      "indicator": "vwap",
+      "op": "gt",
+      "value": 65000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.04,
+    "sl_pct": 0.02,
+    "horizon_bars": 24
+  }
+}

@@ -17,11 +17,12 @@ import argparse
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
-from src.store import read as raw_read, available_range as raw_range
-from src.features.store import write as f_write, available_range as f_range
+from src.ts_store import read as ts_read, write as ts_write
+from src.ts_catalog import get_catalog
 from src.indicators.calculator import calc_all
 
 logger = logging.getLogger(__name__)
@@ -30,58 +31,85 @@ logger = logging.getLogger(__name__)
 def build_features(symbol: str, rebuild: bool = False) -> int:
     """Build features for a symbol. Returns rows written."""
     sym = symbol.lower()
+    asset_id = f"market:binance:{sym}"
+
+    cat = get_catalog()
+    asset_rows = cat[cat["asset_id"] == asset_id] if not cat.empty else pd.DataFrame()
+    raw_rows = asset_rows[asset_rows["frequency"] == "raw"] if not asset_rows.empty else pd.DataFrame()
+    feat_rows = asset_rows[asset_rows["frequency"] == "features"] if not asset_rows.empty else pd.DataFrame()
 
     # Determine which data to process
     if rebuild:
-        raw_start, raw_end = raw_range("binance", sym)
-        start = raw_start
-    else:
-        f_start, f_end = f_range(sym)
-        raw_start, raw_end = raw_range("binance", sym)
-        if f_end and raw_end and f_end >= raw_end:
-            logger.info("features %s: already up to date (latest=%s)", sym, f_end)
+        start = None
+    elif not feat_rows.empty:
+        feat_max = feat_rows["max_ts"].max()
+        raw_max = raw_rows["max_ts"].max() if not raw_rows.empty else None
+        if feat_max and raw_max and feat_max >= raw_max:
+            logger.info("features %s: already up to date (latest=%s)", sym, feat_max)
             return 0
-        start = f_end if f_end else raw_start
+        start = pd.Timestamp(feat_max) if feat_max else None
+    else:
+        start = None
 
-    if start is None:
-        logger.info("features %s: no raw data available", sym)
-        return 0
-
-    logger.info("features %s: building from %s", sym, start)
-    df = raw_read("binance", sym, start=start)
+    logger.info("features %s: building from %s", sym, start or "beginning")
+    df = ts_read(asset_id, frequency="raw", start=start)
     if df.empty:
+        logger.info("features %s: no raw data available", sym)
         return 0
 
     t0 = time.time()
     df = calc_all(df)
 
-    # Merge aligned external data sources
     ext_dir = Path("data/external_aligned/15m")
     if ext_dir.exists():
         for ext_file in sorted(ext_dir.glob("*.parquet")):
             src_name = ext_file.stem
-            ext_df = pd.read_parquet(ext_file)
-            ext_df["ts"] = pd.to_datetime(ext_df["ts"], utc=True)
-            df = df.merge(ext_df, on="ts", how="left")
-            logger.info("features: merged external '%s' (%d cols)", src_name, len(ext_df.columns) - 1)
+            try:
+                ext_df = pd.read_parquet(ext_file)
+                ext_df["ts"] = pd.to_datetime(ext_df["ts"], utc=True)
+                df = df.merge(ext_df, on="ts", how="left")
+                logger.info("features: merged external '%s' (%d cols)", src_name, len(ext_df.columns) - 1)
+            except Exception as e:
+                logger.warning("features: failed to merge '%s': %s", src_name, e)
+
+    # Merge derivatives data (funding_rate, open_interest, taker_ratio, long_short_ratio)
+    deriv_dir = Path("data/ts/derivatives/aligned/15m")
+    if deriv_dir.exists():
+        for deriv_file in sorted(deriv_dir.glob("*.parquet")):
+            src_name = deriv_file.stem
+            try:
+                deriv_df = pd.read_parquet(deriv_file)
+                deriv_df["ts"] = pd.to_datetime(deriv_df["ts"], utc=True)
+                df = df.merge(deriv_df, on="ts", how="left")
+                logger.info("features: merged derivatives '%s' (%d cols)", src_name, len(deriv_df.columns) - 1)
+            except Exception as e:
+                logger.warning("features: failed to merge derivatives '%s': %s", src_name, e)
+
+    # Fill NaN in derivatives columns with forward fill then backward fill
+    deriv_cols = ["funding_rate", "open_interest", "open_interest_value",
+                  "taker_buy_vol", "taker_sell_vol", "taker_ratio",
+                  "long_account", "short_account", "long_short_ratio"]
+    for col in deriv_cols:
+        if col in df.columns:
+            df[col] = df[col].ffill().bfill()
 
     calc_time = time.time() - t0
 
-    n = f_write(sym, df)
+    n = ts_write(asset_id, df, frequency="features")
     logger.info("features %s: wrote %d rows (%.1fM) in %.1fs",
                 sym, n, n / 1_000_000, calc_time)
     return n
 
 
 def build_all(rebuild: bool = False) -> None:
-    """Build features for all symbols that have raw data."""
-    base = Path("data/raw/binance")
-    if not base.exists():
-        logger.info("No raw data found")
+    """Build features for all symbols found in TS Store."""
+    cat = get_catalog()
+    if cat.empty:
+        logger.info("No assets found in TS Store")
         return
 
-    from pathlib import Path
-    symbols = [d.name for d in base.iterdir() if d.is_dir() and d.name != ".gitkeep"]
+    raw_assets = cat[cat["frequency"] == "raw"]["asset_id"].unique()
+    symbols = [aid.split(":")[-1] for aid in raw_assets]
     total = 0
     for sym in symbols:
         total += build_features(sym, rebuild)

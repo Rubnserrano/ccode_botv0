@@ -13,12 +13,10 @@ import argparse
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas as pd
 
-from src.store import read
+from src.ts_store import read as ts_read
 from src.indicators.calculator import calc_all
 from src.backtesting.strategies import STRATEGY_REGISTRY
 from src.backtesting.engine import backtest, save_results
@@ -35,38 +33,48 @@ def _list_strategies():
 
 
 def _load_data(symbol: str, days: int | None, exchange: str = "binance", resample: str | None = None) -> pd.DataFrame:
-    # Load resampled data (e.g. 15m, 1h)
-    if resample:
-        path = Path("data/raw") / exchange / symbol / resample / "data.parquet"
-        if not path.exists():
-            raise FileNotFoundError(f"Resampled data not found: {path}\nRun: python -m src.resample --symbol {symbol.upper()} --to {resample}")
-        df = pd.read_parquet(path)
-        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+    asset_id = f"market:{exchange}:{symbol.lower()}"
+
+    # Try features first (precomputed indicators)
+    df = ts_read(asset_id, frequency="features")
+    if not df.empty:
         if days:
             cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
             df = df[df["ts"] >= cutoff]
-        print(f"  Resampled ({resample}): {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
-        t0 = time.time()
-        df = calc_all(df)
-        print(f"  Indicators: {time.time() - t0:.1f}s")
+        if resample:
+            freq_map = {"5m": "5min", "15m": "15min", "1h": "1h", "1d": "1D"}
+            freq = freq_map.get(resample, resample)
+            df = df.set_index("ts").resample(freq).agg({
+                "open": "first", "high": "max", "low": "min",
+                "close": "last", "volume": "sum",
+            }).dropna().reset_index()
+        print(f"  Features: {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
         return df
 
-    # Try features first (precomputed indicators)
-    from src.features.store import read as f_read, available_range as f_range
-    f_start, f_end = f_range(symbol)
-    if f_start is not None:
-        cutoff = None
-        if days:
-            cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
-        df = f_read(symbol, start=cutoff)
+    # Try resampled frequency
+    if resample:
+        df = ts_read(asset_id, frequency=resample)
         if not df.empty:
-            print(f"  Features: {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
+            if days:
+                cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+                df = df[df["ts"] >= cutoff]
+            print(f"  Resampled ({resample}): {len(df):,} rows ({df['ts'].iloc[0]} → {df['ts'].iloc[-1]})")
+            t0 = time.time()
+            df = calc_all(df)
+            print(f"  Indicators: {time.time() - t0:.1f}s")
             return df
 
     # Fallback: raw + calc_all
-    df = read(exchange, symbol)
+    df = ts_read(asset_id, frequency="raw")
     if df.empty:
-        raise ValueError(f"No data for {symbol}")
+        raise ValueError(f"No data for {asset_id}")
+    if resample:
+        freq_map = {"5m": "5min", "15m": "15min", "1h": "1h", "1d": "1D"}
+        freq = freq_map.get(resample, resample)
+        df = df.set_index("ts").resample(freq).agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum",
+        }).dropna().reset_index()
     if days:
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
         df = df[df["ts"] >= cutoff]

@@ -29,8 +29,8 @@ from pathlib import Path
 import pandas as pd
 
 from src.download import download_symbol
-from src.store import available_range, row_count, write
-from src.features.store import write as f_write
+from src.ts_store import write as ts_write
+from src.ts_catalog import get_catalog
 from src.indicators.calculator import calc_all
 from src.feed import (
     PriceBuffer, TradeBuffer, CandleBuffer,
@@ -104,13 +104,18 @@ async def _download_and_sync(
     """
     try:
         for symbol in symbols:
-            n = row_count(EXCHANGE, symbol)
-            if n == 0:
+            asset_id = f"market:{EXCHANGE}:{symbol}"
+            cat = get_catalog()
+            asset_rows = cat[cat["asset_id"] == asset_id] if not cat.empty else pd.DataFrame()
+            if asset_rows.empty:
                 logger.info("orchestrator: no data for %s, downloading %d days (background)", symbol, days)
                 await download_symbol(symbol.upper(), days=days)
             else:
-                start, end = available_range(EXCHANGE, symbol)
-                logger.info("orchestrator: %s has %d rows (%s → %s)", symbol, n, start, end)
+                raw_rows = asset_rows[asset_rows["frequency"] == "raw"]
+                n = int(raw_rows["rows"].sum()) if not raw_rows.empty else 0
+                min_ts = str(raw_rows.iloc[0].get("min_ts", "?")[:10]) if not raw_rows.empty else "?"
+                max_ts = str(raw_rows.iloc[0].get("max_ts", "?")[:10]) if not raw_rows.empty else "?"
+                logger.info("orchestrator: %s has %d rows (%s → %s)", symbol, n, min_ts, max_ts)
 
         if tsdb:
             for symbol in symbols:
@@ -291,8 +296,9 @@ async def main():
 
 
 def _candle_closed(asset: str, tsdb):
-    """Return a callback that persists closed candles to Parquet + TimescaleDB + Features."""
+    """Return a callback that persists closed candles to TS Store + TimescaleDB."""
     symbol_upper = f"{asset.upper()}USDT"
+    asset_id = f"market:{EXCHANGE}:{symbol_upper.lower()}"
     _buffer: list[dict] = []
     _MAX_BUFFER = 200
 
@@ -310,7 +316,7 @@ def _candle_closed(asset: str, tsdb):
         try:
             df_ind = calc_all(df)
             latest = df_ind.iloc[-1:]
-            f_write(symbol_upper, latest)
+            ts_write(asset_id, latest, frequency="features")
         except Exception as e:
             logger.error("persist: features write failed: %s", e)
 
@@ -323,11 +329,12 @@ def _candle_closed(asset: str, tsdb):
             "close": candle.close,
             "volume": candle.volume,
         }
+        asset_id = f"market:{EXCHANGE}:{symbol_upper.lower()}"
         row_df = pd.DataFrame([row_dict])
         try:
-            write(EXCHANGE, symbol_upper, row_df)
+            ts_write(asset_id, row_df, frequency="raw")
         except Exception as e:
-            logger.error("persist: parquet write failed: %s", e)
+            logger.error("persist: ts_store write failed: %s", e)
 
         try:
             _write_features(row_dict)

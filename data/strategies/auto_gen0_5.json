@@ -1,0 +1,19 @@
+{
+  "name": "auto_gen0_5",
+  "entry_operator": "all",
+  "entry_conditions": [
+    {
+      "indicator": "adx",
+      "op": "lt",
+      "value": 15,
+      "params": {},
+      "rolling": null,
+      "period": null
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.06,
+    "sl_pct": 0.02,
+    "horizon_bars": 48
+  }
+}

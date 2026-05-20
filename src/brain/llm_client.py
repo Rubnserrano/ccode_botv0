@@ -24,14 +24,17 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Cost chain: cheapest first
+# Cost chain: best quality/price first, fallback to cheaper
+# deepseek-chat-v3: ~$0.14/M in — latest version, significantly better at reasoning
+# deepseek-chat (base): same price, slightly worse — fallback
+# gemini-2.0-flash: ~$0.10/M in — fast emergency fallback
 MODEL_CHAIN = [
-    {"name": "deepseek/deepseek-chat",       "cost_per_1k_in": 0.0,   "cost_per_1k_out": 0.0},
-    {"name": "anthropic/claude-3-haiku",     "cost_per_1k_in": 0.00025, "cost_per_1k_out": 0.00125},
-    {"name": "openai/gpt-4o-mini",           "cost_per_1k_in": 0.00015, "cost_per_1k_out": 0.0006},
+    {"name": "deepseek/deepseek-chat-v3-0324", "cost_per_1k_in": 0.00014, "cost_per_1k_out": 0.00028},
+    {"name": "deepseek/deepseek-chat",          "cost_per_1k_in": 0.00014, "cost_per_1k_out": 0.00028},
+    {"name": "google/gemini-2.0-flash-001",     "cost_per_1k_in": 0.00010, "cost_per_1k_out": 0.00040},
 ]
 
-AUDIT_DIR = Path(__file__).resolve().parents[2] / "data" / "parquet" / "brain"
+AUDIT_DIR = Path(__file__).resolve().parents[2] / "data" / "ts"
 
 
 def _prompt_hash(system: str, user: str) -> str:
@@ -66,7 +69,7 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         response_format: str | None = "json_object",
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,
         temperature: float = 0.7,
     ) -> dict:
         """Call OpenRouter with fallback chain.
@@ -111,7 +114,18 @@ class LLMClient:
                     + out_tokens / 1000 * model_info["cost_per_1k_out"]
                 )
                 self.total_cost += cost
-                content_str = result["choices"][0]["message"]["content"]
+
+                # Validate response has content
+                choice = result["choices"][0]
+                finish_reason = choice.get("finish_reason")
+                content_str = choice["message"].get("content")
+
+                # Retry if model returned empty content
+                if not content_str or finish_reason == "length":
+                    logger.warning("brain: %s returned empty content (finish=%s), retrying...", model, finish_reason)
+                    last_error = RuntimeError(f"Empty content (finish={finish_reason})")
+                    await asyncio.sleep(2)
+                    continue
 
                 if response_format == "json_object":
                     if "```json" in content_str:
@@ -145,10 +159,12 @@ class LLMClient:
     async def _call_model(
         self, model: str, system: str, user: str,
         response_format: str | None, max_tokens: int, temperature: float,
+        messages: list[dict] | None = None,
+        tools: list[dict] | None = None,
     ) -> dict:
         payload = {
             "model": model,
-            "messages": [
+            "messages": messages or [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
@@ -157,6 +173,8 @@ class LLMClient:
         }
         if response_format:
             payload["response_format"] = {"type": response_format}
+        if tools:
+            payload["tools"] = tools
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -164,8 +182,16 @@ class LLMClient:
         }
 
         resp = await self.client.post(OPENROUTER_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if not resp.is_success:
+            if "error" in data:
+                msg = data["error"].get("message", str(data["error"]))
+                code = data["error"].get("code", resp.status_code)
+                if code == 429:
+                    raise httpx.HTTPStatusError(msg, request=resp.request, response=resp)
+                raise RuntimeError(f"OpenRouter error: {msg}")
+            resp.raise_for_status()
+        return data
 
     async def close(self):
         await self.client.aclose()

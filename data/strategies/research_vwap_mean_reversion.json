@@ -1,0 +1,20 @@
+{
+  "name": "vwap_mean_reversion",
+  "entry_conditions": [
+    {
+      "indicator": "close",
+      "op": "lt",
+      "value": 64000
+    },
+    {
+      "indicator": "vwap",
+      "op": "gt",
+      "value": 64500
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.03,
+    "sl_pct": 0.015,
+    "horizon_bars": 24
+  }
+}

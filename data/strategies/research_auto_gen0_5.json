@@ -1,0 +1,15 @@
+{
+  "name": "auto_gen0_5",
+  "entry_conditions": [
+    {
+      "indicator": "adx",
+      "op": "lt",
+      "value": 15
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.06,
+    "sl_pct": 0.02,
+    "horizon_bars": 48
+  }
+}
