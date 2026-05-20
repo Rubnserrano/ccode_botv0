@@ -1,7 +1,7 @@
 """Resample OHLCV data to higher timeframes.
 
-Reads 1m Parquet from DataStore, resamples to the target interval,
-and writes back to data/raw/{exchange}/{symbol}/{interval}/.
+Reads data from TS Store, resamples to the target interval,
+and writes back to TS Store.
 
 Usage:
     python -m src.resample --symbol BTCUSDT --to 5m
@@ -10,13 +10,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
-from src.store import read, _SCHEMA
+from src.ts_store import read as ts_read, write as ts_write
 
 _INTERVAL_MAP = {
     "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min",
@@ -31,9 +28,10 @@ def resample(
     to_interval: str,
     days: int | None = None,
 ) -> pd.DataFrame:
-    """Read 1m data from store, resample, and return the result."""
+    """Read raw data from TS Store, resample, and return the result."""
     freq = _INTERVAL_MAP[to_interval]
-    df = read(exchange, symbol)
+    asset_id = f"market:{exchange}:{symbol.lower()}"
+    df = ts_read(asset_id, frequency="raw")
     if df.empty:
         return df
     if days:
@@ -55,19 +53,16 @@ def to_file(
     to_interval: str,
     days: int | None = None,
 ) -> int:
-    """Resample and write to a separate directory.
+    """Resample and write to TS Store.
 
     Returns row count written.
     """
     df = resample(exchange, symbol, to_interval, days)
     if df.empty:
         return 0
-    out_dir = Path("data/raw") / exchange / symbol / to_interval
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "data.parquet"
-    table = pa.Table.from_pandas(df, schema=_SCHEMA, preserve_index=False)
-    pq.write_table(table, path, compression="snappy")
-    return len(df)
+    asset_id = f"market:{exchange}:{symbol.lower()}"
+    n = ts_write(asset_id, df, frequency=to_interval)
+    return n
 
 
 def main():
@@ -84,7 +79,7 @@ def main():
 
     n = to_file("binance", args.symbol.lower(), args.to, args.days)
     if n:
-        print(f"Resampled to {args.to}: {n:,} rows → data/raw/binance/{args.symbol.lower()}/{args.to}/data.parquet")
+        print(f"Resampled to {args.to}: {n:,} rows → TS Store")
     else:
         print("No data to resample")
 

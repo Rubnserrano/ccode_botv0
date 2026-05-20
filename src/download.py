@@ -18,7 +18,7 @@ import httpx
 import pandas as pd
 
 from src.ts_store import write as ts_write
-from src.store import read, available_range, row_count  # legacy — only for metadata
+from src.ts_store import read as ts_read
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,12 @@ async def download_symbol(
     end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     if fill:
-        _, latest = available_range(EXCHANGE, symbol)
-        if latest is None:
+        asset_id = f"market:{EXCHANGE}:{symbol.lower()}"
+        existing = ts_read(asset_id, frequency="raw")
+        if existing.empty:
             start_time = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
         else:
+            latest = existing["ts"].iloc[-1]
             start_time = int(latest.timestamp() * 1000) + 60_000
             if start_time >= end_time:
                 logger.info(f"{symbol}: already up to date")

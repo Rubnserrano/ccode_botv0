@@ -102,14 +102,14 @@ def build_features(symbol: str, rebuild: bool = False) -> int:
 
 
 def build_all(rebuild: bool = False) -> None:
-    """Build features for all symbols that have raw data."""
-    base = Path("data/raw/binance")
-    if not base.exists():
-        logger.info("No raw data found")
+    """Build features for all symbols found in TS Store."""
+    cat = get_catalog()
+    if cat.empty:
+        logger.info("No assets found in TS Store")
         return
 
-    from pathlib import Path
-    symbols = [d.name for d in base.iterdir() if d.is_dir() and d.name != ".gitkeep"]
+    raw_assets = cat[cat["frequency"] == "raw"]["asset_id"].unique()
+    symbols = [aid.split(":")[-1] for aid in raw_assets]
     total = 0
     for sym in symbols:
         total += build_features(sym, rebuild)

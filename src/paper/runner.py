@@ -61,19 +61,23 @@ class PaperRunner:
     def prefill(self, symbol: str, n_candles: int = 200, exchange: str = "binance") -> None:
         """Prefill buffer with historical data so indicators are ready immediately.
 
-        Reads from Feature Store (or falls back to raw+calc_all),
+        Reads from TS Store (features frequency, or falls back to raw+calc_all),
         feeds candles into the buffer, and sets ``_bar_counter`` past warmup.
         """
+        asset_id = f"market:{exchange}:{symbol.lower()}"
         try:
-            from src.features.store import read as f_read, available_range as f_range
-            f_start, _ = f_range(symbol)
-            if f_start is not None:
-                df = f_read(symbol)
-            else:
-                from src.store import read as raw_read
-                df = raw_read(exchange, symbol)
-                from src.indicators.calculator import calc_all
-                df = calc_all(df)
+            from src.ts_store import read as ts_read
+            df = ts_read(asset_id, frequency="features")
+            if df.empty:
+                df = ts_read(asset_id, frequency="15m")
+                if not df.empty:
+                    df = calc_all(df)
+            if df.empty:
+                df = ts_read(asset_id, frequency="raw")
+                if not df.empty:
+                    df = calc_all(df)
+            if df.empty:
+                raise ValueError(f"No data for {asset_id}")
         except Exception as e:
             logger.warning("paper: prefill failed (%s), will warm up live", e)
             return

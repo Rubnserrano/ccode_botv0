@@ -86,16 +86,15 @@ La POC termina cuando el sistema es capaz de:
 ```
 src/
 ├── __init__.py
-├── download.py           # Binance REST historical download (legacy)
+├── download.py           # Binance REST historical download → ts_store
 ├── feed.py               # WebSocket: PriceBuffer, TradeBuffer, CandleBuffer
 ├── main.py               # Orchestrator: data ingestion + paper + agents
 ├── query.py              # Unified multi-asset query engine
-├── resample.py           # OHLCV resampling 1m → 5m/15m/1h/1d
-├── store.py              # Raw Parquet DataStore (legacy — usar ts_store.py)
+├── resample.py           # OHLCV resampling → ts_store
 ├── ts_aligner.py         # Universal time-series aligner
 ├── ts_catalog.py         # Asset catalog with metadata
-├── ts_store.py           # Universal TS Store (Parquet partitions by source_type/asset/freq)
-├── tsdb.py               # TimescaleDB async client (legacy)
+├── ts_store.py           # Universal TS Store (single store for all data)
+├── tsdb.py               # TimescaleDB async client (optional sync)
 │
 ├── backtesting/          # Backtesting engine
 │   ├── engine.py         # Vectorized backtest with TP/SL
@@ -131,11 +130,6 @@ src/
 │   ├── aligner.py        # Align to standard timeframes
 │   └── orchestrator.py   # Background scheduler
 │
-├── mcp_servers/          # MCP servers (unused — see TECH_DEBT.md)
-│   ├── query_server.py
-│   ├── backtest_server.py
-│   └── memory_server.py
-│
 ├── notification/         # Telegram notifications
 │   └── telegram.py
 │
@@ -144,9 +138,8 @@ src/
 │   ├── runner.py         # PaperRunner (CandleBuffer → signals)
 │   └── state.py          # State persistence
 │
-├── research/             # Research loop (legacy — usar brain/)
-│   ├── leaderboard.py    # Leaderboard persistence (JSONL + Parquet)
-│   └── loop.py           # Genetic algorithm loop (pre-LLM)
+├── research/             # Research artifacts
+│   └── leaderboard.py    # Leaderboard persistence (JSONL + Parquet)
 │
 └── strategy_engine/      # JSON-defined strategies
     ├── schema.py         # StrategyDef, Condition, ExitRules
@@ -208,17 +201,16 @@ tests/
 | 21 | Overnight fixes | Rate limit, backoff, signaling |
 | 22 | Train/test split | OOS validation, strategy templates |
 | 23 | Universal TS Store + MCP Servers | Unified time-series storage, MCP servers |
+| 24 | Foundation Fix | docs, identidad, backlog |
+| 25 | Test Foundation | 52 tests covering ts_store, feed, fixes |
+| 26 | Unified Store | Removed store.py, features/store.py, research/loop.py, mcp_servers/. All code uses ts_store. |
 
-### Known Inefficiencies (detected post-Phase 23)
+### Known Inefficiencies (post-Phase 26)
 
-| Inefficiency | Location | Impact | Planned Fix |
+| Inefficiency | Location | Impact | Status |
 |---|---|---|---|
-| **Dual stores** | `store.py` (old) vs `ts_store.py` (new) | Data scattered across `data/raw/` and `data/ts/`. `main.py` uses old, `query.py` uses new | Phase 26: Unified Store |
-| **Competing research loops** | `src/research/loop.py` (genetic) vs `src/brain/orchestrator.py` (LLM) | Both write to same leaderboard with different quality levels | Phase 26: deprecate genetic loop |
-| **MCP servers unused** | `src/mcp_servers/*.py` | 5KB dead code. `mcp_agent.py` reimplements tools inline | Phase 31: remove or rewire |
-| **Test gap** | Only 2/50+ modules tested | 31 tests cover only `store.py` and `feed.py` | Phase 25: Test Foundation |
-| **Dual data trees** | `data/raw/` (old) + `data/ts/` (new) + `data/features/` (orphan) | Fragmented storage, hard to discover | Phase 26: migrate to TS Store |
-| **API key in shell script** | `research_loop.sh` line 17 | Hardcoded key (security risk) | Phase 25: move to `.env` |
+| **Test gap** | Many modules untested | 52 tests cover ts_store, feed, fixes only | Phase 27+: expand coverage |
+| **Legacy data dirs** | `data/raw/`, `data/features/` | Still exist on disk but no longer written by code | Can be purged after migration confirm |
 
 ## 6. Cognitive Architecture
 
@@ -282,7 +274,7 @@ TIMESCALE_DSN="postgres://ccode:ccode@localhost:5432/ccode"  \
   --rounds 2 --n-strategies 5 --days 365 --resample 15m
 ```
 
-Resultados en `data/parquet/research/leaderboard.parquet` y Telegram si está configurado.
+Resultados en `data/ts/_leaderboard/leaderboard.parquet` y Telegram si está configurado.
 
 ### Run MCP agent (tool-calling)
 
@@ -494,7 +486,7 @@ Decisiones pendientes que afectan al diseño futuro. Cualquier agente debe conoc
 | Q5 | Feature store versionado? | Pendiente. Mientras, overwrite. |
 | Q6 | Portfolio optimization en POC? | No. Apuntado para Phase 31. |
 | Q7 | Evaluación de cuentas fondeadas? | No tocar hasta post-POC. |
-| Q8 | Eliminar legacy (store.py, research/loop.py, MCP servers)? | Sí, en Phase 31. |
+| Q8 | Eliminar legacy (store.py, research/loop.py, MCP servers)? | ✅ Hecho en Phase 26. |
 | Q9 | Embeddings locales o vía API? | Locales con sentence-transformers. |
 | Q10 | Tests en CI/CD? | No para la POC. Tests manuales via pytest. |
 

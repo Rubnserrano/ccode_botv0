@@ -107,8 +107,8 @@ echo "  POST-RUN ANALYSIS"
 echo "════════════════════════════════════════════════════════════════"
 
 # Copy leaderboard to results
-if [ -f "data/parquet/research/leaderboard.parquet" ]; then
-    cp "data/parquet/research/leaderboard.parquet" "$SESSION_DIR/leaderboard_snapshot.parquet"
+if [ -f "data/ts/_leaderboard/leaderboard.parquet" ]; then
+    cp "data/ts/_leaderboard/leaderboard.parquet" "$SESSION_DIR/leaderboard_snapshot.parquet"
     echo "[post] Leaderboard copied to $SESSION_DIR/leaderboard_snapshot.parquet"
 fi
 

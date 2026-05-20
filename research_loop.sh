@@ -4,7 +4,7 @@
 # Runs for ~1 hour (3600s total).
 set -e
 
-API_KEY="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"
+API_KEY="${OPENROUTER_API_KEY:-}"
 MAX_SECONDS=3600
 START_TS=$(date +%s)
 ROUND=1
@@ -26,10 +26,14 @@ while true; do
     echo "============================================"
     echo ""
 
-    docker compose exec -T -e OPENROUTER_API_KEY="$API_KEY" app \
-        timeout $REMAINING python -m src.brain.orchestrator \
-        --n 10 --days 365 --resample 15m --rounds 1 \
-        --api-key "$API_KEY"
+if [ -z "$API_KEY" ]; then
+    echo "ERROR: OPENROUTER_API_KEY not set. Create .env or export it."
+    exit 1
+fi
+
+.venv/bin/python3 -m src.brain.orchestrator \
+    --n 10 --days 365 --resample 15m --rounds 1 \
+    --api-key "$API_KEY"
 
     EXIT_CODE=$?
     echo "  Round $ROUND finished with exit code $EXIT_CODE"
@@ -44,9 +48,9 @@ echo ""
 echo "============================================"
 echo "  RESEARCH COMPLETE — $ROUND rounds"
 echo "============================================"
-docker compose exec app python -c "
+.venv/bin/python3 -c "
 import pandas as pd
-df = pd.read_parquet('data/parquet/research/leaderboard.parquet')
+df = pd.read_parquet('data/ts/_leaderboard/leaderboard.parquet')
 brain = df[df['llm_model'].notna() & (df['llm_model'] != '') & (df['n_trades'] > 0)]
 print(f'Brain strategies: {len(brain)}')
 print(f'Sharpe > 0: {(brain[\"sharpe\"] > 0).sum()}')

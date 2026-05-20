@@ -73,10 +73,10 @@ async def _notify(method: str, *args, **kwargs) -> None:
 def _detect_current_regime() -> str:
     """Detect current market regime from latest data."""
     try:
-        data_path = Path("data/raw/binance/btcusdt/15m/data.parquet")
-        if not data_path.exists():
+        from src.ts_store import read as ts_read
+        df = ts_read("market:binance:btcusdt", frequency="15m", limit=500)
+        if df.empty:
             return "unknown"
-        df = pd.read_parquet(data_path)
         df = calc_all(df)
         latest = df.iloc[-1]
         regime = latest.get("regime", -1)

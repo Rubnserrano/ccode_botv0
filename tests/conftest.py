@@ -1,15 +1,17 @@
-"""Shared fixtures for store tests."""
-from __future__ import annotations
-
+"""Shared fixtures for ts_store tests."""
 import shutil
 from pathlib import Path
 
 import pytest
 
+TEST_ASSET_ID = "market:test_exchange:testsym"
+TEST_BASE = Path("data/ts/market") / TEST_ASSET_ID
+
 
 @pytest.fixture(autouse=True)
-def _clean_store_data():
-    """Remove test_exchange/TESTSYM data before each store test."""
-    base = Path("data/raw") / "test_exchange" / "testsym"
-    if base.exists():
-        shutil.rmtree(base)
+def _clean_test_store():
+    if TEST_BASE.exists():
+        shutil.rmtree(TEST_BASE)
+    yield
+    if TEST_BASE.exists():
+        shutil.rmtree(TEST_BASE)
