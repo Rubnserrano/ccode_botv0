@@ -111,7 +111,7 @@ class EvolveConfig:
     horizon: int = 12
     warmup: int = 50
     cooldown: int = 2
-    size_usdc: float = 50.0
+    size_usdc: float = 500.0
 
 
 @dataclass

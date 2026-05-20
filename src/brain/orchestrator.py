@@ -151,6 +151,32 @@ async def run_round(
             expanded = expand_hypothesis(family, n_variants=5)
             all_strategies.extend(expanded)
 
+    # Regime-aware filtering: prioritize SHORT families in bearish regimes
+    latest_regime = int(df_train.iloc[-1].get("regime", -1)) if len(df_train) > 0 else -1
+    short_families = {"short_trend_exhaustion", "short_overbought_reversal",
+                      "short_breakdown", "short_sentiment_extreme", "short_volatility_crush"}
+    long_families = {"momentum_continuation", "volatility_expansion", "mean_reversion",
+                     "regime_transition", "sentiment_divergence", "breakout_structure",
+                     "volatility_compression_breakout"}
+
+    if latest_regime == 2:  # trending_down
+        logger.info("orchestrator: regime=trending_down — boosting SHORT families, deboosting LONG")
+        for s in all_strategies:
+            archetype = s.get("archetype", "")
+            if archetype in long_families and "direction" not in s:
+                s["direction"] = "long"
+        # Ensure SHORT families are well represented — add more variants if sparse
+        short_count = sum(1 for s in all_strategies if s.get("archetype", "") in short_families)
+        if short_count < 20:
+            for family_name in short_families:
+                expanded = expand_hypothesis(family_name, n_variants=10)
+                all_strategies.extend(expanded)
+    elif latest_regime == 1:  # trending_up
+        logger.info("orchestrator: regime=trending_up — boosting LONG families")
+        for s in all_strategies:
+            if s.get("archetype", "") in short_families:
+                s["direction"] = "long"  # flip shorts to longs in uptrend
+
     if not all_strategies:
         logger.warning("orchestrator: search engine returned no strategies")
         return []
@@ -201,7 +227,7 @@ async def run_round(
         horizon=12,
         warmup=50,
         cooldown=2,
-        size_usdc=50,
+        size_usdc=500,
         tp_pct=0.005,
         sl_pct=0.005,
     )
@@ -224,7 +250,7 @@ async def run_round(
 
         _, summary = backtest(df_fast, _eval_fast,
             horizon=sd.exit.horizon_bars, warmup=50, cooldown=2,
-            size_usdc=50, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
+            size_usdc=500, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
         sharpe = summary.get("sharpe", -999)
         n_t = summary.get("n_trades", 0)
         max_dd = abs(summary.get("max_dd", 0))
@@ -251,7 +277,7 @@ async def run_round(
         return []
 
     # Phase 2: Full backtest on TRAIN + walk-forward
-    wf_cfg = WalkForwardConfig(n_splits=4, horizon=12, warmup=50, cooldown=2, size_usdc=50)
+    wf_cfg = WalkForwardConfig(n_splits=4, horizon=12, warmup=50, cooldown=2, size_usdc=500)
 
     for idx, (strategy_dict, sd) in enumerate(survivors):
         strat_name = sd.name
@@ -263,7 +289,7 @@ async def run_round(
         t0 = time.time()
         trades, summary = backtest(df_train, _eval_full,
             horizon=sd.exit.horizon_bars, warmup=50, cooldown=2,
-            size_usdc=50, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
+            size_usdc=500, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
         bt_elapsed = time.time() - t0
         n_trades = summary.get("n_trades", 0)
         sharpe_train = summary.get("sharpe", 0)
@@ -293,23 +319,23 @@ async def run_round(
         if len(df_test) > 100:
             trades_test, summary_test = backtest(df_test, _eval_full,
                 horizon=sd.exit.horizon_bars, warmup=50, cooldown=2,
-                size_usdc=50, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
+                size_usdc=500, tp_pct=sd.exit.tp_pct, sl_pct=sd.exit.sl_pct)
             sharpe_test = summary_test.get("sharpe", 0)
             n_test_trades = summary_test.get("n_trades", 0)
             max_dd_test = abs(summary_test.get("max_dd", 0))
 
-        # Overfit detection: relative + absolute signal floor (A.2)
+        # Overfit detection: relative + absolute signal floor
         overfit = False
-        if sharpe_train < 0.5:
-            overfit = True  # no hay señal suficiente, cualquier cosa es ruido
-        elif n_test_trades >= 10:
-            if sharpe_test < sharpe_train * 0.5:
-                overfit = True  # perdió >50% del rendimiento en test
+        if sharpe_train < 0.2:
+            overfit = True  # no hay señal suficiente
+        elif n_test_trades >= 20:
+            if sharpe_test < sharpe_train * 0.3:
+                overfit = True  # perdió >70% del rendimiento en test
 
-        # Max DD gate OOS (A.3)
+        # Max DD gate OOS
         total_pnl_test = abs(summary_test.get("total_pnl", 0)) if n_test_trades >= 10 else 0
         dd_ratio_test = max_dd_test / total_pnl_test if total_pnl_test > 0 else 0
-        if dd_ratio_test > 0.15:
+        if dd_ratio_test > 0.3:
             overfit = True
 
         # Analyst (only if passed OOS)

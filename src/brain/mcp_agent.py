@@ -313,7 +313,7 @@ async def _handle_tool_call(name: str, args: dict) -> str:
                 df, eval_fn,
                 horizon=sd.exit.horizon_bars,
                 warmup=50, cooldown=2,
-                size_usdc=50,
+                size_usdc=500,
                 tp_pct=sd.exit.tp_pct,
                 sl_pct=sd.exit.sl_pct,
             )

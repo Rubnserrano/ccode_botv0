@@ -23,6 +23,11 @@ class HypothesisFamily(Enum):
     FUNDING_REVERSAL = "funding_reversal"
     CROWDED_POSITIONING = "crowded_positioning"
     LIQUIDATION_CASCADE = "liquidation_cascade"
+    SHORT_TREND_EXHAUSTION = "short_trend_exhaustion"
+    SHORT_OVERBOUGHT_REVERSAL = "short_overbought_reversal"
+    SHORT_BREAKDOWN = "short_breakdown"
+    SHORT_SENTIMENT_EXTREME = "short_sentiment_extreme"
+    SHORT_VOLATILITY_CRUSH = "short_volatility_crush"
 
 
 FAMILY_DESCRIPTIONS = {
@@ -78,6 +83,35 @@ FAMILY_DESCRIPTIONS = {
         "Señal: OI alta + funding extremo + cambio súbito en taker_ratio. "
         "Las liquidaciones masivas amplifican movimientos y crean reversiones. "
         "Usa combinación de open_interest, funding_rate y taker_ratio."
+    ),
+    HypothesisFamily.SHORT_TREND_EXHAUSTION: (
+        "Apostar CONTRA la tendencia cuando muestra señales de agotamiento. "
+        "Funciona en regímenes trending cuando el momentum se desacelera. "
+        "Señal: ADX cayendo tras momentum alto, volumen decreciente en dirección del trend. "
+        "Dirección: SHORT — vende cuando el trend alcista se agota."
+    ),
+    HypothesisFamily.SHORT_OVERBOUGHT_REVERSAL: (
+        "Apostar a reversión bajista cuando el activo está sobrecomprado. "
+        "Funciona cuando RSI > 70, precio muy por encima de EMA, volumen seco. "
+        "Dirección: SHORT — vende cuando detecta sobrecompra."
+    ),
+    HypothesisFamily.SHORT_BREAKDOWN: (
+        "Vender en ruptura de soportes con confirmación de volumen. "
+        "El precio rompe un suelo clave con volumen y momentum negativo. "
+        "Usa ruptura de mínimos anteriores, EMA cruzando a la baja, volumen alto. "
+        "Dirección: SHORT — vende en breakdown."
+    ),
+    HypothesisFamily.SHORT_SENTIMENT_EXTREME: (
+        "Vender cuando el sentimiento es exuberantemente alcista (complacencia). "
+        "Fear & Greed > 70 (greed extremo), funding positivo alto, OI creciendo. "
+        "La complacencia precede a las correcciones. "
+        "Dirección: SHORT — vende cuando el mercado está eufórico."
+    ),
+    HypothesisFamily.SHORT_VOLATILITY_CRUSH: (
+        "Vender cuando la volatilidad se comprime y el precio está en tope. "
+        "ATR bajo + precio cerca del máximo reciente + volumen decreciente. "
+        "La compresión de volatilidad en topos señala distribución. "
+        "Dirección: SHORT — vende antes de la expansión bajista."
     ),
 }
 
@@ -232,6 +266,7 @@ FAMILY_TEMPLATES: dict[HypothesisFamily, dict[str, Any]] = {
             "sl_pct": {"default": 0.03, "range": [0.015, 0.06], "type": float},
             "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
         },
+        "direction": "short",
         "conditions_template": [
             {"indicator": "abs_funding_rate", "op": "gt", "value": "{funding_extreme}"},
             {"indicator": "taker_ratio", "op": "lt", "value": 0.7},
@@ -240,6 +275,90 @@ FAMILY_TEMPLATES: dict[HypothesisFamily, dict[str, Any]] = {
         "feature_requirements": [
             {"name": "abs_funding_rate", "formula": "abs(funding_rate)", "description": "Absolute funding rate (extreme in either direction)"},
         ],
+    },
+    HypothesisFamily.SHORT_TREND_EXHAUSTION: {
+        "indicators": ["adx", "ema", "close", "volume"],
+        "params": {
+            "adx_peak": {"default": 35, "range": [25, 50], "type": int},
+            "ema_period": {"default": 21, "range": [10, 50], "type": int},
+            "tp_pct": {"default": 0.04, "range": [0.02, 0.08], "type": float},
+            "sl_pct": {"default": 0.02, "range": [0.01, 0.04], "type": float},
+            "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
+        },
+        "direction": "short",
+        "conditions_template": [
+            {"indicator": "adx", "op": "lt", "value": "{adx_peak}"},
+            {"indicator": "adx", "op": "cross_below", "value": 25},
+            {"indicator": "close", "op": "gt_rolling", "rolling": "ema", "period": "{ema_period}"},
+        ],
+        "description_for_llm": "SHORT: sell when trend is exhausted — ADX falling below threshold after being high, while price still above EMA (overextended).",
+    },
+    HypothesisFamily.SHORT_OVERBOUGHT_REVERSAL: {
+        "indicators": ["rsi", "close", "ema", "volume"],
+        "params": {
+            "rsi_high": {"default": 70, "range": [60, 85], "type": int},
+            "ema_period": {"default": 21, "range": [10, 50], "type": int},
+            "tp_pct": {"default": 0.03, "range": [0.015, 0.06], "type": float},
+            "sl_pct": {"default": 0.015, "range": [0.01, 0.03], "type": float},
+            "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
+        },
+        "direction": "short",
+        "conditions_template": [
+            {"indicator": "rsi", "op": "gt", "value": "{rsi_high}"},
+            {"indicator": "close", "op": "gt_rolling", "rolling": "ema", "period": "{ema_period}"},
+        ],
+        "description_for_llm": "SHORT: sell overbought conditions — RSI above threshold + price above EMA (extended).",
+    },
+    HypothesisFamily.SHORT_BREAKDOWN: {
+        "indicators": ["close", "volume", "atr", "ema"],
+        "params": {
+            "range_period": {"default": 20, "range": [10, 50], "type": int},
+            "breakdown_pct": {"default": -0.02, "range": [-0.05, -0.01], "type": float},
+            "tp_pct": {"default": 0.05, "range": [0.03, 0.10], "type": float},
+            "sl_pct": {"default": 0.02, "range": [0.01, 0.04], "type": float},
+            "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
+        },
+        "direction": "short",
+        "conditions_template": [
+            {"indicator": "breakdown_pct_below_low", "op": "gt", "value": "{breakdown_pct}"},
+            {"indicator": "volume", "op": "gt_rolling", "rolling": "sma", "period": 20},
+        ],
+        "feature_requirements": [
+            {"name": "breakdown_pct_below_low", "formula": "(close - min_roll(low.shift(1), {range_period})) / min_roll(low.shift(1), {range_period})", "description": "Percentage below previous rolling low (shifted to avoid lookahead). Negative values mean below the low."},
+        ],
+    },
+    HypothesisFamily.SHORT_SENTIMENT_EXTREME: {
+        "indicators": ["close", "ema", "volume"],
+        "params": {
+            "ema_period": {"default": 21, "range": [10, 50], "type": int},
+            "tp_pct": {"default": 0.04, "range": [0.02, 0.08], "type": float},
+            "sl_pct": {"default": 0.02, "range": [0.01, 0.04], "type": float},
+            "horizon_bars": {"default": 36, "range": [12, 72], "type": int},
+        },
+        "direction": "short",
+        "conditions_template": [
+            {"indicator": "close", "op": "gt_rolling", "rolling": "ema", "period": "{ema_period}"},
+            {"indicator": "volume", "op": "lt_rolling", "rolling": "sma", "period": 20},
+        ],
+        "description_for_llm": "SHORT: sell when price is above EMA but volume is drying up — distribution pattern.",
+    },
+    HypothesisFamily.SHORT_VOLATILITY_CRUSH: {
+        "indicators": ["atr", "close", "volume", "rsi"],
+        "params": {
+            "atr_period": {"default": 14, "range": [7, 21], "type": int},
+            "compression_threshold": {"default": 0.8, "range": [0.6, 0.9], "type": float},
+            "rsi_high": {"default": 60, "range": [50, 75], "type": int},
+            "tp_pct": {"default": 0.05, "range": [0.03, 0.10], "type": float},
+            "sl_pct": {"default": 0.025, "range": [0.015, 0.05], "type": float},
+            "horizon_bars": {"default": 36, "range": [12, 72], "type": int},
+        },
+        "direction": "short",
+        "conditions_template": [
+            {"indicator": "atr", "op": "lt_rolling", "rolling": "sma", "period": "{atr_period}"},
+            {"indicator": "rsi", "op": "gt", "value": "{rsi_high}"},
+            {"indicator": "close", "op": "gt_rolling", "rolling": "sma", "period": 50},
+        ],
+        "description_for_llm": "SHORT: sell when volatility is compressed, RSI is high, and price is above long-term SMA — compression at the top signals distribution.",
     },
 }
 

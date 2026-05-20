@@ -67,7 +67,8 @@ def evaluate(df: pd.DataFrame, strategy_def: StrategyDef) -> pd.Series:
         combined = combined & mask
 
     signals = pd.Series(0, index=df.index, dtype=int)
-    signals.iloc[warmup:] = combined.iloc[warmup:].astype(int)
+    direction_val = -1 if strategy_def.direction == "short" else 1
+    signals.iloc[warmup:] = combined.iloc[warmup:].astype(int) * direction_val
     return signals
 
 

@@ -195,7 +195,16 @@ def _build_strategy(
             if isinstance(val, str) and val.startswith("{") and val.endswith("}"):
                 pname = val[1:-1]
                 c[key] = params.get(pname, val)
+        # Reject absolute price thresholds (likely overfitting)
+        if c.get("indicator") == "close" and c.get("op") in ("gt", "lt", "gte", "lte"):
+            raw_val = c.get("value")
+            if isinstance(raw_val, (int, float)) and raw_val > 1000:
+                logger.info("search: rejecting absolute price threshold: close %s %s", c["op"], raw_val)
+                continue
         conditions.append(c)
+
+    if not conditions:
+        return None
 
     strategy = {
         "name": f"{base_name.replace(' ', '_').lower()}_v{index + 1}",
@@ -206,6 +215,7 @@ def _build_strategy(
             "horizon_bars": params.get("horizon_bars", 24),
         },
         "archetype": base_name.lower().replace(" ", "_"),
+        "direction": template.get("direction", "long"),
     }
 
     feature_reqs = template.get("feature_requirements", [])

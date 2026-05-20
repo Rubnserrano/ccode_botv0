@@ -43,6 +43,7 @@ class StrategyDef:
     entry_conditions: list[Condition]
     exit: ExitRules = field(default_factory=ExitRules)
     entry_operator: str = "all"  # only "all" (AND) for now
+    direction: str = "long"  # "long" or "short"
 
 
 def validate_condition(c: dict) -> Condition:
@@ -84,9 +85,14 @@ def validate_strategy(sd: dict) -> StrategyDef:
         raise ValueError("Strategy missing 'entry_conditions'")
     conditions = [validate_condition(c) for c in sd["entry_conditions"]]
     exit_rules = ExitRules(**sd.get("exit", {}))
+    direction = sd.get("direction", "long")
+    if direction not in ("long", "short"):
+        logger.warning("Invalid direction '%s', defaulting to 'long'", direction)
+        direction = "long"
     return StrategyDef(
         name=sd["name"],
         entry_conditions=conditions,
         exit=exit_rules,
         entry_operator=sd.get("entry_operator", "all"),
+        direction=direction,
     )

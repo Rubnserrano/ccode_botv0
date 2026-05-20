@@ -39,7 +39,7 @@ class PaperRunner:
     def __init__(
         self,
         strategy_name: str = "ema_trend",
-        size_usdc: float = 50.0,
+        size_usdc: float = 500.0,
         horizon: int = 12,
         tp_pct: float = 0.005,
         sl_pct: float = 0.005,
