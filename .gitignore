@@ -10,3 +10,18 @@ build/
 *.log
 data/live_state.json
 timescale_data/
+
+# Result data (regenerated, large)
+results/
+data/parquet/survival.jsonl
+data/ts/_concept_stats.jsonl
+data/ts/_fingerprints.jsonl
+data/ts/_leaderboard/
+data/ts/_survival.jsonl
+data/ts/audit.jsonl
+data/ts/derivatives/aligned/
+data/ts/derivatives/funding_rate/
+data/ts/derivatives/long_short_ratio/
+data/ts/derivatives/open_interest/
+data/ts/derivatives/taker_ratio/
+data/ts/market/market:binance:btcusdt/features/

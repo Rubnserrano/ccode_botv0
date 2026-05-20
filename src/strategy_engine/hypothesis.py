@@ -20,6 +20,9 @@ class HypothesisFamily(Enum):
     SENTIMENT_DIVERGENCE = "sentiment_divergence"
     BREAKOUT_STRUCTURE = "breakout_structure"
     VOLATILITY_COMPRESSION_BREAKOUT = "volatility_compression_breakout"
+    FUNDING_REVERSAL = "funding_reversal"
+    CROWDED_POSITIONING = "crowded_positioning"
+    LIQUIDATION_CASCADE = "liquidation_cascade"
 
 
 FAMILY_DESCRIPTIONS = {
@@ -57,6 +60,24 @@ FAMILY_DESCRIPTIONS = {
         "Comprimir (rango estrecho + ATR bajo) y estallar con dirección. "
         "Ideal para capturar el inicio de movimientos grandes. "
         "Usa periodos de consolidación seguidos de expansión de rango."
+    ),
+    HypothesisFamily.FUNDING_REVERSAL: (
+        "Explotar reversiones tras tasas de funding extremas. "
+        "Funding positivo alto → overrecrowded longs → probable corrección. "
+        "Funding negativo alto → overrecrowded shorts → probable rebote. "
+        "Usa funding_rate con umbral y combinación con precio/RSI."
+    ),
+    HypothesisFamily.CROWDED_POSITIONING: (
+        "Detectar posicionamiento overrecrowded usando OI + long/short ratio. "
+        "OI creciendo + ratio long/short > 1.5 → mercado overrecrowded alcista. "
+        "OI creciendo + ratio < 0.6 → mercado overrecrowded bajista. "
+        "El unrecrowding produce movimientos acelerados."
+    ),
+    HypothesisFamily.LIQUIDATION_CASCADE: (
+        "Capturar aceleraciones de precio por liquidaciones en cascada. "
+        "Señal: OI alta + funding extremo + cambio súbito en taker_ratio. "
+        "Las liquidaciones masivas amplifican movimientos y crean reversiones. "
+        "Usa combinación de open_interest, funding_rate y taker_ratio."
     ),
 }
 
@@ -166,6 +187,58 @@ FAMILY_TEMPLATES: dict[HypothesisFamily, dict[str, Any]] = {
         ],
         "feature_requirements": [
             {"name": "atr_compression_ratio", "formula": "atr_14 / sma(atr_14, {compression_lookback})", "description": "ATR compression ratio (current vs historical)"},
+        ],
+    },
+    HypothesisFamily.FUNDING_REVERSAL: {
+        "indicators": ["funding_rate", "close", "rsi", "volume"],
+        "params": {
+            "funding_threshold": {"default": 0.0005, "range": [0.0002, 0.002], "type": float},
+            "rsi_threshold": {"default": 30, "range": [20, 45], "type": int},
+            "tp_pct": {"default": 0.04, "range": [0.02, 0.08], "type": float},
+            "sl_pct": {"default": 0.02, "range": [0.01, 0.04], "type": float},
+            "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
+        },
+        "conditions_template": [
+            {"indicator": "funding_rate", "op": "gt", "value": "{funding_threshold}"},
+            {"indicator": "rsi", "op": "gt", "value": 50},
+        ],
+        "feature_requirements": [
+            {"name": "funding_rate", "formula": "funding_rate", "description": "Perpetual futures funding rate (8h, ffill to 15m)"},
+        ],
+    },
+    HypothesisFamily.CROWDED_POSITIONING: {
+        "indicators": ["open_interest", "long_short_ratio", "close", "volume"],
+        "params": {
+            "ls_threshold": {"default": 1.5, "range": [1.2, 2.5], "type": float},
+            "oi_lookback": {"default": 24, "range": [12, 48], "type": int},
+            "tp_pct": {"default": 0.05, "range": [0.02, 0.10], "type": float},
+            "sl_pct": {"default": 0.025, "range": [0.01, 0.05], "type": float},
+            "horizon_bars": {"default": 36, "range": [12, 72], "type": int},
+        },
+        "conditions_template": [
+            {"indicator": "long_short_ratio", "op": "gt", "value": "{ls_threshold}"},
+            {"indicator": "oi_growth", "op": "gt", "value": 0},
+        ],
+        "feature_requirements": [
+            {"name": "oi_growth", "formula": "pct_change(open_interest, 24)", "description": "OI growth rate (24 bars)"},
+        ],
+    },
+    HypothesisFamily.LIQUIDATION_CASCADE: {
+        "indicators": ["funding_rate", "open_interest", "taker_ratio", "atr", "close"],
+        "params": {
+            "funding_extreme": {"default": 0.001, "range": [0.0005, 0.003], "type": float},
+            "taker_threshold": {"default": 1.5, "range": [1.2, 2.0], "type": float},
+            "tp_pct": {"default": 0.06, "range": [0.03, 0.12], "type": float},
+            "sl_pct": {"default": 0.03, "range": [0.015, 0.06], "type": float},
+            "horizon_bars": {"default": 24, "range": [12, 48], "type": int},
+        },
+        "conditions_template": [
+            {"indicator": "abs_funding_rate", "op": "gt", "value": "{funding_extreme}"},
+            {"indicator": "taker_ratio", "op": "lt", "value": 0.7},
+            {"indicator": "atr", "op": "gt_rolling", "rolling": "sma", "period": 20},
+        ],
+        "feature_requirements": [
+            {"name": "abs_funding_rate", "formula": "abs(funding_rate)", "description": "Absolute funding rate (extreme in either direction)"},
         ],
     },
 }

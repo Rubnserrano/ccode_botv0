@@ -60,7 +60,6 @@ def build_features(symbol: str, rebuild: bool = False) -> int:
     t0 = time.time()
     df = calc_all(df)
 
-    # Merge aligned external data sources
     ext_dir = Path("data/external_aligned/15m")
     if ext_dir.exists():
         for ext_file in sorted(ext_dir.glob("*.parquet")):
@@ -72,6 +71,27 @@ def build_features(symbol: str, rebuild: bool = False) -> int:
                 logger.info("features: merged external '%s' (%d cols)", src_name, len(ext_df.columns) - 1)
             except Exception as e:
                 logger.warning("features: failed to merge '%s': %s", src_name, e)
+
+    # Merge derivatives data (funding_rate, open_interest, taker_ratio, long_short_ratio)
+    deriv_dir = Path("data/ts/derivatives/aligned/15m")
+    if deriv_dir.exists():
+        for deriv_file in sorted(deriv_dir.glob("*.parquet")):
+            src_name = deriv_file.stem
+            try:
+                deriv_df = pd.read_parquet(deriv_file)
+                deriv_df["ts"] = pd.to_datetime(deriv_df["ts"], utc=True)
+                df = df.merge(deriv_df, on="ts", how="left")
+                logger.info("features: merged derivatives '%s' (%d cols)", src_name, len(deriv_df.columns) - 1)
+            except Exception as e:
+                logger.warning("features: failed to merge derivatives '%s': %s", src_name, e)
+
+    # Fill NaN in derivatives columns with forward fill then backward fill
+    deriv_cols = ["funding_rate", "open_interest", "open_interest_value",
+                  "taker_buy_vol", "taker_sell_vol", "taker_ratio",
+                  "long_account", "short_account", "long_short_ratio"]
+    for col in deriv_cols:
+        if col in df.columns:
+            df[col] = df[col].ffill().bfill()
 
     calc_time = time.time() - t0
 

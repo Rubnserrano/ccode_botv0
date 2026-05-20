@@ -100,3 +100,76 @@ def align_source(df: pd.DataFrame, source: DataSource, timeframe: str) -> pd.Dat
     logger.info("aligner: wrote %d rows to %s", len(aligned), out_path)
 
     return aligned
+
+
+def align_derivatives(symbol: str, timeframe: str = "15m") -> dict[str, pd.DataFrame]:
+    """Align all derivatives data (funding_rate, OI, taker_ratio, long_short_ratio).
+
+    Reads raw data from data/external/{source_name}/{symbol}/,
+    resamples to regular timeframe using ffill,
+    saves to data/external_aligned/{timeframe}/{source_name}.parquet.
+
+    Returns dict of {source_name: aligned_df} that were successfully aligned.
+    """
+    results = {}
+
+    search_dirs = [
+        Path("data/ts/derivatives"),
+        Path("data/external"),
+    ]
+
+    for source_name in ["funding_rate", "open_interest", "taker_ratio", "long_short_ratio"]:
+        source_path = None
+        for base_dir in search_dirs:
+            candidate = base_dir / source_name / symbol.lower()
+            if candidate.exists() and list(candidate.glob("*.parquet")):
+                source_path = candidate
+                break
+
+        if source_path is None:
+            logger.debug("align_derivatives: no raw data for %s", source_name)
+            continue
+
+        parquet_files = sorted(source_path.glob("*.parquet"))
+        if not parquet_files:
+            continue
+
+        frames = [pd.read_parquet(p) for p in parquet_files]
+        df = pd.concat(frames, ignore_index=True)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        df = df.sort_values("ts").drop_duplicates(subset="ts").reset_index(drop=True)
+
+        if df.empty:
+            continue
+
+        freq = _OFFSET_MAP.get(timeframe, "15min")
+        value_columns = [c for c in df.columns if c not in ("ts", "symbol")]
+
+        full_idx = pd.date_range(
+            start=df["ts"].min().floor(freq),
+            end=df["ts"].max().ceil(freq),
+            freq=freq,
+            tz="UTC",
+            name="ts",
+        )
+        aligned = pd.DataFrame({"ts": full_idx})
+        aligned = aligned.set_index("ts")
+
+        src = df[["ts"] + value_columns].set_index("ts").sort_index()
+        if src.index.duplicated().any():
+            src = src.groupby(src.index).mean()
+
+        for col in value_columns:
+            aligned[col] = src[col].reindex(aligned.index, method="ffill")
+
+        aligned = aligned.reset_index()
+
+        out_dir = Path("data/ts/derivatives") / "aligned" / timeframe
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{source_name}.parquet"
+        aligned.to_parquet(out_path, compression="snappy")
+        logger.info("align_derivatives: wrote %d rows to %s", len(aligned), out_path)
+
+        results[source_name] = aligned
+
+    return results

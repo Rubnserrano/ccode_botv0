@@ -422,6 +422,20 @@ async def run_research(
         raise FileNotFoundError(f"No data for {asset_id} @ {resample} in TS Store")
     cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
     df = df[df["ts"] >= cutoff]
+
+    # Merge derivatives data (funding rate, OI, taker ratio, long/short ratio)
+    from pathlib import Path as _Path
+    _deriv_dir = _Path("data/ts/derivatives/aligned") / resample
+    if _deriv_dir.exists():
+        for _df_file in sorted(_deriv_dir.glob("*.parquet")):
+            try:
+                _deriv_df = pd.read_parquet(_df_file)
+                _deriv_df["ts"] = pd.to_datetime(_deriv_df["ts"], utc=True)
+                df = df.merge(_deriv_df, on="ts", how="left")
+                logger.info("orchestrator: merged derivatives '%s'", _df_file.stem)
+            except Exception as e:
+                logger.warning("orchestrator: failed to merge derivatives '%s': %s", _df_file.stem, e)
+
     df = calc_all(df)
 
     split_idx = int(len(df) * 0.8)
