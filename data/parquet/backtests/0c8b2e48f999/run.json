@@ -1,0 +1,28 @@
+{
+  "run_id": "0c8b2e48f999",
+  "strategy": "macd_crossover",
+  "config": {
+    "strategy": "macd_crossover",
+    "symbol": "btcusdt",
+    "horizon": 12,
+    "warmup": 50,
+    "cooldown": 2,
+    "size_usdc": 50.0,
+    "days": 365
+  },
+  "summary": {
+    "n_trades": 38827,
+    "wins": 3253,
+    "losses": 35574,
+    "win_rate": 0.0838,
+    "total_pnl": -4430.96,
+    "avg_pnl": -0.11,
+    "sharpe": -1.2031,
+    "sortino": -1.5251,
+    "max_dd": -4430.96,
+    "profit_factor": 0.0564,
+    "p_value": 0.0,
+    "passes_gates": false
+  },
+  "run_at": "2026-05-11T14:59:24.378978+00:00"
+}

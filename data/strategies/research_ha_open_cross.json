@@ -1,0 +1,15 @@
+{
+  "name": "ha_open_cross",
+  "entry_conditions": [
+    {
+      "indicator": "ha_open",
+      "op": "lt",
+      "value": 64000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.05,
+    "sl_pct": 0.025,
+    "horizon_bars": 36
+  }
+}

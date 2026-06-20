@@ -5,8 +5,11 @@ Conditions are combined with AND logic.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 VALID_OPS = {"lt", "gt", "lte", "gte", "eq", "ne",
              "cross_above", "cross_below",
@@ -60,6 +63,9 @@ def validate_condition(c: dict) -> Condition:
             raise ValueError(f"Invalid rolling '{c['rolling']}'. Valid: {VALID_ROLLING}")
         if "period" not in c:
             raise ValueError(f"op '{op}' requires 'period' field")
+    value = c.get("value")
+    if value is not None and not isinstance(value, (int, float)):
+        logger.warning("Non-numeric value '%s' for indicator '%s', coercing", value, c.get("indicator"))
     return Condition(
         indicator=c["indicator"],
         op=op,

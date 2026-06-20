@@ -16,15 +16,15 @@ _MEMORY_PATH = Path(__file__).resolve().parents[2] / "data" / "parquet" / "resea
 
 
 def fingerprint(strategy_dict: dict) -> str:
-    """Create a unique hash from the indicators and operators used.
+    """Create a unique hash from (indicator, op, value) tuples.
 
-    Two strategies that use the same indicators with the same operators
-    (even with different numeric values) get the SAME fingerprint.
-    This catches structural duplicates like "estrat_1" vs "estrat_1_v2".
+    Two strategies with the SAME indicator, operator, AND value
+    get the same fingerprint. This catches EXACT duplicates
+    while allowing variations like `adx < 15` vs `adx < 20`.
     """
     conditions = strategy_dict.get("entry_conditions", [])
     sig = sorted([
-        (c.get("indicator", "?"), c.get("op", "?"))
+        (c.get("indicator", "?"), c.get("op", "?"), str(c.get("value", "?")))
         for c in conditions
     ])
     raw = json.dumps(sig, sort_keys=True)

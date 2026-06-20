@@ -1,0 +1,15 @@
+{
+  "name": "ema_reversal",
+  "entry_conditions": [
+    {
+      "indicator": "ema",
+      "op": "lt",
+      "value": 66000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.04,
+    "sl_pct": 0.02,
+    "horizon_bars": 36
+  }
+}

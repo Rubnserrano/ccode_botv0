@@ -1,0 +1,35 @@
+{
+  "name": "fear_greed",
+  "url": "https://api.alternative.me/fng/",
+  "description": "",
+  "params": {
+    "limit": "0"
+  },
+  "headers": {},
+  "schedule": "1h",
+  "parse": {
+    "type": "json",
+    "timestamp_field": "data[].timestamp",
+    "value_field": "data[].value",
+    "value_transform": "float"
+  },
+  "columns": {
+    "value": "fear_greed"
+  },
+  "align": {
+    "method": "ffill",
+    "decay_periods": 0,
+    "target_timeframes": [
+      "15m"
+    ]
+  },
+  "rate_limit": {
+    "max_calls_per_hour": 60,
+    "cooldown_seconds": 60
+  },
+  "storage_quota_mb": 100,
+  "api_key": "",
+  "enabled": true,
+  "last_fetch_at": "2026-05-11T21:42:27.161164+00:00",
+  "total_rows": 3018
+}

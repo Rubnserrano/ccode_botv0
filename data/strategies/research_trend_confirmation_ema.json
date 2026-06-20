@@ -1,0 +1,20 @@
+{
+  "name": "trend_confirmation_ema",
+  "entry_conditions": [
+    {
+      "indicator": "ema",
+      "op": "lt",
+      "value": 65000
+    },
+    {
+      "indicator": "close",
+      "op": "gt",
+      "value": 64000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.03,
+    "sl_pct": 0.015,
+    "horizon_bars": 48
+  }
+}

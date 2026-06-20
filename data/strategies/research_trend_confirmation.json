@@ -1,0 +1,20 @@
+{
+  "name": "trend_confirmation",
+  "entry_conditions": [
+    {
+      "indicator": "adx",
+      "op": "gt",
+      "value": 40
+    },
+    {
+      "indicator": "ema",
+      "op": "lt",
+      "value": 65000
+    }
+  ],
+  "exit": {
+    "tp_pct": 0.05,
+    "sl_pct": 0.025,
+    "horizon_bars": 48
+  }
+}
